@@ -53,7 +53,8 @@ mshta "LECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto]
 
 - `<input>` — a `.csv` (auto-loads into the viewer) or a `.lnk` file / shortcut directory (prefilled;
   processed immediately with `/auto`).
-- `<outDir>` — CSV output directory (optional).
+- `<outDir>` — CSV output directory (optional; defaults to `_Processed\<host>\LECmd` next to the app).
+- **Target hostname** is required before processing — it names the `_Processed\<host>\LECmd` output folder next to the app (family convention shared with the DFIR-Artifact-Finder, so processed evidence is visible per host per tool). Guessed from `Collection-<host>-…` paths, a passed `_Processed\<host>\` outDir, or this machine's name for live paths — overwrite the guess if it's wrong.
 
 This is the shared contract used by the DFIR-Artifact-Finder launcher.
 
