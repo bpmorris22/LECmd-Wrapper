@@ -1,0 +1,1568 @@
+<!doctype html>
+<html>
+<head>
+<meta http-equiv="x-ua-compatible" content="IE=edge">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>LECmd Wrapper</title>
+<HTA:APPLICATION
+  ID="lecmdHta"
+  APPLICATIONNAME="LECmd Wrapper"
+  BORDER="thick"
+  CAPTION="yes"
+  SCROLL="auto"
+  SINGLEINSTANCE="yes"
+  SHOWINTASKBAR="yes"
+  MAXIMIZEBUTTON="yes"
+  MINIMIZEBUTTON="yes"
+  INNERBORDER="no"
+  CONTEXTMENU="yes"
+  SELECTION="yes" />
+<!--
+  LECmd CSV contract, VERIFIED 2026-07-06 against LECmd 1.5.0.0 output (net6 build, live Recent folder):
+
+  <ts>_LECmd_Output.csv  (one row per .lnk file, 27 columns):
+    SourceFile,SourceCreated,SourceModified,SourceAccessed,
+    TargetCreated,TargetModified,TargetAccessed,
+    FileSize,RelativePath,WorkingDirectory,FileAttributes,HeaderFlags,
+    DriveType,VolumeSerialNumber,VolumeLabel,
+    LocalPath,NetworkPath,CommonPath,Arguments,
+    TargetIDAbsolutePath,TargetMFTEntryNumber,TargetMFTSequenceNumber,
+    MachineID,MachineMACAddress,MACVendor,TrackerCreatedOn,ExtraBlocksPresent
+    - all timestamps UTC "yyyy-MM-dd HH:mm:ss".
+    - SourceCreated = FIRST time the target was opened (lnk created); SourceModified = LAST time opened
+      (shell rewrites the .lnk each open). SourceAccessed is unreliable — the collection/parse itself bumps it.
+    - FileSize is the TARGET's size at link time, NOT the .lnk file size. The .lnk size is stat'd via FSO (lnkSize).
+    - FileAttributes / HeaderFlags / ExtraBlocksPresent are ", "-joined lists inside one quoted cell.
+    - LocalPath / NetworkPath / CommonPath / TargetIDAbsolutePath / RelativePath+WorkingDirectory are alternative
+      reconstructions of the target — the viewer derives ONE targetPath (first non-empty, in that order).
+    - LECmd emits ONE csv (no Timeline sibling). The Timeline view here is built client-side from
+      SourceCreated (first opened) + SourceModified (last opened).
+
+  LECmd (like PECmd) crashes at Console.get_WindowWidth() when run with NO args in a non-interactive host, on BOTH
+  the net4 and net6 builds → always run it in a VISIBLE console window. `--version` is safe without a console.
+  Benign console line "Extra data found in ftp case" is a parser info note, NOT an error — excluded from error triage.
+-->
+<style>
+  html{margin:0;height:100%;background:#0d1117}
+  body{margin:0;height:100%;background:#0d1117;color:#e6edf3;font-family:Segoe UI,Tahoma,sans-serif;font-size:16px}
+  #content{zoom:0.9}
+  a{color:#58a6ff}
+  .mono{font-family:Consolas,"Courier New",monospace}
+  .muted{color:#8b949e}
+  .err{color:#f85149}
+  .ok{color:#3fb950}
+  header{padding:8px 14px;background:#161b22;border-bottom:1px solid #30363d}
+  header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
+  header h1 small{color:#8b949e;font-weight:400}
+  .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .wrap{padding:12px 14px}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:12px}
+  .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
+  label.fld{display:block;margin:6px 0 2px;font-size:11px;color:#8b949e}
+  input.txt,select,textarea{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:5px 8px;font-size:13px;font-family:Consolas,monospace}
+  input.wide{width:62%}
+  .btn{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;margin:2px}
+  .btn:hover{border-color:#58a6ff}
+  .btn.primary{background:#1f6feb;border-color:#1f6feb}
+  .btn.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  .row{white-space:nowrap}
+  .stat{display:inline-block;background:#1c2330;border:1px solid #30363d;border-radius:8px;padding:6px 12px;margin:0 6px 6px 0;min-width:70px;vertical-align:top}
+  .stat .n{font-size:17px;font-weight:700;display:block}
+  .stat .l{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
+  .cards3{width:100%}
+  .col3{display:inline-block;width:32%;vertical-align:top;margin-right:1%}
+  .brow{white-space:nowrap;margin:3px 0}
+  .blab{display:inline-block;width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font-family:Consolas,monospace;font-size:11px}
+  .blab.lnk{cursor:pointer;color:#58a6ff}
+  .blab.lnk:hover{text-decoration:underline}
+  .btrack{display:inline-block;width:32%;height:12px;background:#1c2330;border-radius:3px;overflow:hidden;vertical-align:middle}
+  .bfill{display:block;height:100%;background:#1f6feb}
+  .bval{display:inline-block;width:18%;text-align:right;font-size:11px;color:#8b949e;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:4px 7px;border-bottom:1px solid #30363d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  th{background:#1c2330;cursor:pointer;color:#c9d1d9;position:relative;z-index:3;box-shadow:0 1px 0 #30363d}
+  th:hover{color:#58a6ff}
+  td{max-width:360px}
+  tr.sus td{background:#2a1416}
+  tr.sus td.first{border-left:3px solid #ff6b6b}
+  tr.sel td{background:#1c2f4a}
+  .scroll{max-height:52vh;overflow:auto;border:1px solid #30363d;border-radius:8px}
+  .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600;margin-right:3px}
+  .tag.sus{background:#3a1416;color:#ff6b6b}
+  .tag.weapon{background:#3a1416;color:#ff6b6b;border:1px solid #ff6b6b}
+  .tag.usr{background:#3a2d10;color:#d29922}
+  .tag.lol{background:#10263f;color:#58a6ff}
+  .tag.rare{background:#241a3a;color:#b083f0}
+  .tag.ioc{background:#3a1416;color:#ff6b6b;border:1px solid #ff6b6b}
+  .tag.gen{background:#21262d;color:#8b949e}
+  .dl{font-family:Consolas,"Courier New",monospace;font-size:11px;max-height:210px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px;margin:4px 0;white-space:nowrap}
+  .dl div{overflow:hidden;text-overflow:ellipsis}
+  .kv{font-size:12px;margin:2px 0}
+  .kv b{display:inline-block;min-width:150px;color:#8b949e;font-weight:400}
+  .chip{display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#21262d;color:#c9d1d9;margin:2px 3px 2px 0}
+  .hl-user{color:#d29922}
+  .hl-ioc{color:#ff6b6b;font-weight:700}
+  .argbox{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;margin:4px 0;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}
+  .argbox.weapon{border-color:#ff6b6b}
+  #log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#8b949e;max-height:140px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;display:none;margin-top:8px}
+  .hide{display:none}
+  .lnk{cursor:pointer;color:#58a6ff}
+  .lnk:hover{text-decoration:underline}
+  .sep{display:inline-block;width:1px;height:18px;background:#30363d;margin:0 6px;vertical-align:middle}
+  .modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.66);z-index:1000;overflow:auto}
+  .modal .mcard{max-width:780px;margin:36px auto;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px 22px}
+  .modal h2{margin:0 0 6px;font-size:18px;font-weight:600}
+  .modal h3{margin:12px 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
+  .modal ul{margin:4px 0;padding-left:20px}.modal li{margin:3px 0;font-size:13px}
+  .modal p{font-size:13px;margin:6px 0}
+  .modal code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 6px;font-family:Consolas,monospace;font-size:12px}
+  .modal .x{float:right;cursor:pointer;color:#8b949e;font-size:22px;line-height:1}.modal .x:hover{color:#e6edf3}
+  .modal .gh{font-family:Consolas,monospace;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>LECmd Wrapper <small>&mdash; DFIR LNK triage <span id="appver"></span></small></h1>
+  <span class="pill" id="verpill">version: checking&hellip;</span>
+  <span class="pill" id="srcpill">no data loaded</span>
+  <span style="float:right">
+    <button class="btn" id="helpBtn" onclick="openHelp()" title="Help, about &amp; GitHub link">Help</button>
+    <button class="btn primary hide" id="selfUpd" onclick="doSelfUpdate()" title="A newer version is available on GitHub">Update</button>
+    <button class="btn" id="fdown" title="Smaller text">A&minus;</button>
+    <button class="btn" id="fup" title="Larger text">A+</button>
+  </span>
+</header>
+
+<div class="wrap" id="content">
+
+  <!-- CONTROL PANEL -->
+  <div class="card">
+    <h3>LECmd control panel</h3>
+    <div class="muted" id="exeline" style="font-size:11px;margin-bottom:6px"></div>
+    <label class="fld">Shortcut(s) to process
+      &mdash; <select id="inMode" title="Single file = process one .lnk (LECmd -f). Directory = recurse a folder (LECmd -d) and process every .lnk found inside (KAPE/Velociraptor collection trees work as-is).">
+        <option value="d">directory (recursive)</option><option value="f">single .lnk file</option></select>
+      &nbsp;<label style="font-size:12px" title="-q: quiet console output. Recommended for directory runs — printing per-file detail to the console is the slow part on big trees.">
+        <input type="checkbox" id="optQuiet" checked> quiet</label>
+      &nbsp;<label style="font-size:12px" title="--all: process EVERY file, not just *.lnk. Use for collection trees with mangled extensions or to hunt LNKs with a double/missing extension. Slower, and non-LNK files produce parse errors (expected).">
+        <input type="checkbox" id="optAll"> all files</label>
+      &nbsp;<label style="font-size:12px" title="-r: only process shortcuts that point at a REMOVABLE drive. A fast pre-filter for USB investigations on huge trees (the viewer's Removable category does the same on already-loaded data).">
+        <input type="checkbox" id="optR"> removable only</label>
+      &nbsp;<label style="font-size:12px" title="--mp: display higher-precision timestamps (sub-second).">
+        <input type="checkbox" id="optMp"> precise timestamps</label>
+    </label>
+    <input class="txt wide" id="inPath" value="">
+    <input type="file" id="inPick" style="display:none">
+    <button class="btn" id="browseBtn">Browse&hellip;</button>
+    <button class="btn" id="liveBtn" title="Point at this user's live Recent folder (%AppData%\Microsoft\Windows\Recent). No elevation needed for your own profile.">Scan my Recent folder</button>
+    <label class="fld">CSV output directory</label>
+    <input class="txt wide" id="outDir" value="">
+    <button class="btn" id="openDirBtn">Open folder</button>
+    <div style="margin-top:10px">
+      <button class="btn" id="verBtn">Check version</button>
+      <button class="btn" id="updBtn">Update / download LECmd</button>
+      <span class="sep"></span>
+      <button class="btn primary" id="procBtn">Process &rarr; analyze</button>
+      <button class="btn" id="loadBtn">Load existing CSV&hellip;</button>
+      <input type="file" id="csvPick" style="display:none">
+      <span class="sep"></span>
+      <button class="btn" id="logToggle">Show log</button>
+      <span class="muted" id="status" style="margin-left:8px"></span>
+    </div>
+    <div style="margin-top:8px" id="producedRow" class="hide">
+      <label class="fld">Produced CSVs &mdash; pick one to view</label>
+      <select id="producedSel" style="min-width:70%"></select>
+      <button class="btn" id="loadSelBtn">Load selected</button>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results" class="hide">
+    <div class="card">
+      <h3 id="ovTitle">Overview</h3>
+      <div id="statbar"></div>
+    </div>
+
+    <div class="card cards3 hide" id="lnkCards">
+      <div class="col3"><h3>Recently opened (last opened)</h3><div id="topRecent"></div></div>
+      <div class="col3"><h3>Volumes &amp; origins</h3><div id="topVols"></div></div>
+      <div class="col3"><h3>Suspicious shortcuts</h3><div id="topSus"></div></div>
+    </div>
+
+    <div class="card">
+      <h3 id="tableTitle">Shortcuts</h3>
+      <div class="row hide" style="margin-bottom:8px" id="viewToggle">
+        <button class="btn on" id="vLinks" title="One row per .lnk file">Links</button>
+        <button class="btn" id="vTime" title="One row per activity event — first-opened and last-opened of every shortcut, flattened and sorted">Timeline (activity)</button>
+        <label style="font-size:12px;margin-left:10px" title="Also flatten the TARGET file's created/modified timestamps into the timeline. Off by default — those describe the target file, not user activity, and double the row count.">
+          <input type="checkbox" id="optTgtTs"> include target timestamps</label>
+      </div>
+      <div class="row hide" style="margin-bottom:8px" id="lnkCats">
+        <button class="btn on" data-cat="all">All</button>
+        <button class="btn" data-cat="sus">Suspicious</button>
+        <button class="btn" data-cat="args">Args</button>
+        <button class="btn" data-cat="exec">Exec-target</button>
+        <button class="btn" data-cat="net">Network (UNC)</button>
+        <button class="btn" data-cat="usb">Removable</button>
+        <button class="btn" data-cat="userpath">User-path</button>
+        <button class="btn" data-cat="recent">Recent</button>
+        <button class="btn" data-cat="ioc">IOC hits</button>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <input class="txt" id="q" placeholder="search target, arguments, machine, volume&hellip;" style="width:280px">
+        <span id="srcWrap" class="hide"><span class="sep"></span><label class="muted" style="font-size:12px">source:</label>
+          <select id="srcSel" title="Filter by source file."><option value="">all source files</option></select></span>
+        <span id="dateCtl" class="hide">
+          <span class="sep"></span>
+          <input class="txt mono" id="dfrom" placeholder="from YYYY-MM-DD" style="width:140px" title="Filter by Last opened (UTC)">
+          <span class="muted">&rarr;</span>
+          <input class="txt mono" id="dto" placeholder="to YYYY-MM-DD" style="width:140px" title="Filter by Last opened (UTC)">
+        </span>
+        <span class="sep"></span>
+        <button class="btn" id="iocBtn">IOC / keywords&hellip;</button>
+        <button class="btn" id="clearBtn">clear</button>
+        <button class="btn" id="exportBtn">Export view &rarr; CSV</button>
+        <button class="btn" id="copyBtn">Copy for case notes</button>
+        <span class="muted" id="count" style="margin-left:8px"></span>
+      </div>
+      <div id="iocWrap" class="hide" style="margin-bottom:8px">
+        <label class="fld">IOC / keyword list — comma or newline separated; matched (case-insensitive substring) against target path, arguments, source file, working dir, volume label and machine ID. Matches score +3 and light up red in the detail pane.</label>
+        <textarea id="iocBox" rows="3" style="width:70%;vertical-align:top"></textarea>
+        <button class="btn" id="iocApply">Apply</button>
+        <button class="btn" id="iocLoad">Load file&hellip;</button>
+        <input type="file" id="iocPick" style="display:none">
+        <span class="muted" id="iocInfo" style="font-size:11px"></span>
+      </div>
+      <div class="scroll" id="tblScroll"><table id="tbl"></table></div>
+      <div class="muted" id="lnkFoot" style="font-size:11px;margin-top:6px">All timestamps UTC. Suspicious rows are shaded (heuristic score &ge; 2: weaponized arguments, executable/user-path target, masquerade, double-extension, IOC hits&hellip;). Click a row for full detail (all timestamps with semantics, every path variant, full arguments, volume &amp; tracker block). Max 6000 rows shown; export writes the full filtered set.</div>
+    </div>
+
+    <div class="card hide" id="detailCard">
+      <h3>Shortcut detail <span class="lnk" id="detCopy" style="float:right;margin-left:12px">copy record</span><span class="lnk" id="detClose" style="float:right">close &times;</span></h3>
+      <div id="detBody"></div>
+    </div>
+  </div>
+
+</div>
+
+<script language="JScript">
+"use strict";
+
+var APP_VERSION = "0.1.0";
+var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
+var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
+var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
+var LIVE_RECENT = "";                // resolved in init() to %AppData%\Microsoft\Windows\Recent
+var EXE = "";
+var EXE_DIR = "";
+var LOCAL_VER = "";
+var LATEST_VER = "";
+var WEB_OK = false;                  // could we reach the Zimmerman Tools site to check latest?
+var QUERY = "";
+var MAXROWS = 6000;
+var LASTOUTDIR = "";
+var qTimer = null;
+var MODE = "lnk";                    // "lnk" = rich LNK analysis, "generic" = raw table
+var VIEW = "links";                  // lnk mode: "links" = one row per .lnk, "time" = one row per activity event
+var ROWS = [];                       // lnk records
+var EVENTS = [];                     // flattened activity events {t, ms, day, which, rec}
+var SHOW_TGT = false;                // timeline also flattens target created/modified
+var CURCAT = "all";
+var DFROM = 0, DTO = 0;
+var SORTKEY = 5, SORTDIR = -1;       // links view: default Last opened desc
+var TSORTKEY = 1, TSORTDIR = -1;     // timeline view: default EventTime desc
+var IOCS = [];                       // lowercased IOC / keyword terms
+var DETREC = null;                   // record currently shown in the detail pane
+var GHEAD = null, GROWS = [], GSRC = "";
+var GSORTKEY = -1, GSORTDIR = 1;
+var GSRCIDX = -1;                    // generic mode: index of the SourceFile column
+var SRCFILTER = "";                  // selected source-file filter (generic mode)
+var BUSY = false;                    // a LECmd run is in progress
+var PRODUCED = [];                   // CSVs produced by the last run
+
+/* suspicion knobs (spec §8) */
+var USERPATHS = ["\\users\\","\\appdata\\","\\temp\\","\\downloads\\","\\programdata\\","\\perflogs\\","\\windows\\temp\\","\\$recycle.bin\\","\\public\\"];
+/* L1 WEAPON — LOLBIN / download / encoded-command patterns in the Arguments field */
+var LOLARG = /powershell|pwsh|(^|[^a-z])cmd(\.exe)?[\s"']|\/c\s|\/k\s|-nop|-w\s+hidden|-windowstyle|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|(^|[^a-z])curl\s|(^|[^a-z])wget\s|-enc|-e\s+[A-Za-z0-9+\/]|encodedcommand|frombase64|iex[\s("']|invoke-|downloadstring|downloadfile|webclient|http:\/\/|https:\/\/|ftp:\/\/|\\\\[^\\]|\.ps1|\.vbs|\.js[\s"']|\.hta|\.bat|\.cmd|\.scr/i;
+/* L3 executable/script target extensions */
+var EXECEXT = {exe:1,dll:1,ps1:1,bat:1,cmd:1,vbs:1,vbe:1,js:1,jse:1,wsf:1,wsh:1,hta:1,scr:1,pif:1,com:1,jar:1,msi:1,msp:1,cpl:1};
+/* L5 double-extension: a benign-looking extension immediately followed by an executable one */
+var DBLEXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|jpg|jpeg|png|gif|zip|rar|csv|htm|html)\.(exe|scr|bat|cmd|vbs|vbe|js|jse|wsf|hta|pif|com|ps1|jar|msi)$/i;
+/* L6 OS binary names */
+var OSNAMES = {svchost:1,lsass:1,csrss:1,services:1,winlogon:1,wininit:1,taskhostw:1,dllhost:1,conhost:1,smss:1,explorer:1,spoolsv:1,rundll32:1};
+var RECENT_DAYS = 14;
+
+/* ---------- tiny helpers ---------- */
+function $(id){ return document.getElementById(id); }
+function esc(s){ if(s==null) return ""; s=String(s);
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function endsWith(s,suf){ if(!s) return false; s=String(s); return s.length>=suf.length && s.substring(s.length-suf.length)===suf; }
+function contains(s,sub){ return String(s).indexOf(sub)>=0; }
+function nf(n){ n=String(n); var dot=n.indexOf("."); var dec=""; if(dot>=0){ dec=n.substring(dot); n=n.substring(0,dot); }
+  var r="",c=0; for(var k=n.length-1;k>=0;k--){ r=n.charAt(k)+r; c++; if(c%3===0&&k>0) r=","+r; } return r+dec; }
+function setStatus(msg,cls){ var el=$("status"); el.innerHTML=esc(msg); el.className=cls||"muted"; }
+function appendLog(t){ var el=$("log"); if(el.getAttribute("data-ph")==="1"){ el.innerHTML=""; el.setAttribute("data-ph","0"); }
+  el.style.display="block"; $("logToggle").innerHTML="Hide log"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
+function trimStr(s){ return String(s).replace(/^\s+|\s+$/g,""); }
+function baseName(p){ if(!p) return ""; p=String(p); var i=Math.max(p.lastIndexOf("\\"),p.lastIndexOf("/")); return i>=0?p.substring(i+1):p; }
+function extOf(name){ if(!name) return ""; name=String(name); var i=name.lastIndexOf("."); if(i<0) return ""; return name.substring(i+1).toLowerCase(); }
+function truncate(s,n){ s=String(s); return s.length>n?(s.substring(0,n)+"…"):s; }
+function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/\s*\bhide\b/g,"");
+  e.className = vis ? c : (c+" hide"); }
+function msOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if(!m) return 0; return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]); }
+function dayOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); if(!m) return 0; return Number(m[1]+m[2]+m[3]); }
+
+/* ---------- file IO via ActiveX (UTF-8 safe, with network-zone fallback) ----------
+   ADODB.Stream is the proper UTF-8 reader, but when the .hta runs from a NETWORK location
+   (mapped drive / UNC share) mshta assigns it the intranet/internet zone and ADODB refuses
+   every LoadFromFile/SaveToFile with "Safety settings on this computer prohibit accessing a
+   data source on another domain". FSO is not zone-checked, so we fall back to ANSI file IO:
+   CSV structure is unaffected (all-ASCII), only rare non-ASCII chars (accented usernames in
+   paths) display mojibake'd. Best fidelity = run locally. */
+var FILE_IO="adodb";                 // flips to "fso" permanently on the first zone-policy block
+function zoneNote(){
+  appendLog("NOTE: this app is running from a network location, so Windows zone policy blocks the UTF-8 file reader (ADODB.Stream). Falling back to ANSI file IO — everything works, but non-ASCII characters (accented usernames in paths) may display incorrectly. For full fidelity copy this folder to a LOCAL path (e.g. C:\\Tools\\LECmd) and run it from there.");
+}
+function readUtf8(path){
+  if(FILE_IO==="adodb"){
+    try{
+      // ReadText(-1) on a large file is quadratic in MSHTML; read in 64KB chunks.
+      var st=new ActiveXObject("ADODB.Stream");
+      st.Type=2; st.Charset="utf-8"; st.Open(); st.LoadFromFile(path);
+      var parts=[]; while(!st.EOS){ parts.push(st.ReadText(65536)); } st.Close();
+      return parts.join("");
+    }catch(e){
+      if(!/safety settings|data source/i.test(e.message||"")) throw e;   // real IO errors propagate
+      FILE_IO="fso"; zoneNote();
+    }
+  }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var f=fso.OpenTextFile(path,1,false,0), out=f.ReadAll(); f.Close();
+  // a UTF-8 BOM read as ANSI shows up as three cp1252 chars — strip it
+  if(out.length>=3 && out.charCodeAt(0)===239 && out.charCodeAt(1)===187 && out.charCodeAt(2)===191) out=out.substring(3);
+  return out;
+}
+function writeUtf8(path,text){
+  if(FILE_IO==="adodb"){
+    try{
+      var st=new ActiveXObject("ADODB.Stream");
+      st.Type=2; st.Charset="utf-8"; st.Open(); st.WriteText(text); st.SaveToFile(path,2); st.Close();
+      return;
+    }catch(e){
+      if(!/safety settings|data source/i.test(e.message||"")) throw e;
+      FILE_IO="fso"; zoneNote();
+    }
+  }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var f=fso.CreateTextFile(path,true,false); f.Write(text); f.Close();
+}
+function uid(){ return new Date().getTime()+""+Math.floor(Math.random()*100000); }
+/* cmd expands %N / %VAR% inside .bat lines even within quotes — Velociraptor trees contain literal % (C%3A) */
+function batEsc(s){ return String(s).replace(/%/g,"%%"); }
+
+/* Run a batch script, wait, return {rc, log}. show=true → visible console window. */
+function runBat(lines, show){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var tmp=fso.GetSpecialFolder(2)+"";
+  var stamp=uid();
+  var bat=tmp+"\\lecmd_"+stamp+".bat";
+  var logp=tmp+"\\lecmd_"+stamp+".log";
+  var f=fso.CreateTextFile(bat,true);
+  f.WriteLine("@echo off");
+  for(var i=0;i<lines.length;i++){ f.WriteLine(lines[i].replace(/__LOG__/g,logp)); }
+  f.Close();
+  var rc=sh.Run('cmd /c ""'+bat+'""', show?1:0, true);
+  var txt="";
+  try{ if(fso.FileExists(logp)) txt=readUtf8(logp); }catch(e){ txt="(could not read log: "+e.message+")"; }
+  try{ fso.DeleteFile(bat); }catch(e2){}
+  try{ if(fso.FileExists(logp)) fso.DeleteFile(logp); }catch(e3){}
+  return { rc:rc, log:txt };
+}
+
+/* Run a batch NON-blocking; writes a .done marker when finished. Caller polls with pollDone().
+   Keeps the HTA responsive (no MSHTML long-running-script watchdog). */
+function runBatAsync(lines, show){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var tmp=fso.GetSpecialFolder(2)+"";
+  var stamp=uid();
+  var bat=tmp+"\\lecmd_"+stamp+".bat";
+  var logp=tmp+"\\lecmd_"+stamp+".log";
+  var donep=tmp+"\\lecmd_"+stamp+".done";
+  var f=fso.CreateTextFile(bat,true);
+  f.WriteLine("@echo off");
+  for(var i=0;i<lines.length;i++){ f.WriteLine(lines[i].replace(/__LOG__/g,logp)); }
+  f.WriteLine('echo done> "'+donep+'"');   // marker written after everything above completes
+  f.Close();
+  sh.Run('cmd /c ""'+bat+'""', show?1:0, false);   // false = do NOT block the script
+  return { bat:bat, log:logp, done:donep, elapsed:0 };
+}
+function pollDone(ctx){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(fso.FileExists(ctx.done)){
+    var log=""; try{ if(fso.FileExists(ctx.log)) log=readUtf8(ctx.log); }catch(e){ log="(could not read log: "+e.message+")"; }
+    try{ fso.DeleteFile(ctx.bat); }catch(e1){}
+    try{ fso.DeleteFile(ctx.done); }catch(e2){}
+    try{ if(fso.FileExists(ctx.log)) fso.DeleteFile(ctx.log); }catch(e3){}
+    ctx.onDone(log);
+    return;
+  }
+  ctx.elapsed+=1;
+  if(ctx.elapsed>1800){ ctx.onTimeout&&ctx.onTimeout(); return; }   // 30-min safety cap
+  if(ctx.onTick) ctx.onTick(ctx.elapsed);
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+
+/* ---------- source-file filter (generic mode) ---------- */
+function distinctVals(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(v!=null && v!=="" && !seen[v]){ seen[v]=1; out.push(v); } } return out; }
+function shortPathN(p,n){ p=String(p); var parts=p.split("\\"); if(parts.length<=n) return p; return "…\\"+parts.slice(parts.length-n).join("\\"); }
+function shortPath(p){ return shortPathN(p,4); }
+function populateSourceFilter(vals){
+  var sel=$("srcSel"); sel.innerHTML="";
+  var o0=document.createElement("option"); o0.value=""; o0.text="all source files ("+vals.length+")"; sel.add(o0);
+  vals=vals.slice(0).sort();
+  for(var i=0;i<vals.length;i++){ var o=document.createElement("option"); o.value=vals[i]; o.text=shortPath(vals[i]); sel.add(o); }
+  SRCFILTER=""; sel.value="";
+  showEl("srcWrap", vals.length>1);
+}
+
+/* ---------- tooling: locate / version / download ---------- */
+function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
+function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
+function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
+function htaFolder(){
+  try{ var cl=lecmdHta.commandLine+""; var m=cl.match(/"([^"]+\.hta)"/i); if(!m) m=cl.match(/([A-Za-z]:\\[^"]+\.hta)/i);
+    if(m) return parentDir(m[1]); }catch(e){}
+  try{ var p=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\"); return parentDir(p); }catch(e2){}
+  return "";
+}
+function resolveExe(){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var dir=htaFolder(), cands=[];
+  if(dir) cands.push(dir+"\\LECmd.exe");
+  cands.push("C:\\ZimmermanTools\\net6\\LECmd.exe");   // prefer net6/net9 builds
+  cands.push("C:\\ZimmermanTools\\LECmd.exe");
+  try{ var up=sh.ExpandEnvironmentStrings("%USERPROFILE%"); if(up && up.indexOf("%")<0) cands.push(up+"\\Downloads\\1-Package\\KAPE\\Modules\\bin\\LECmd.exe"); }catch(e){}
+  for(var i=0;i<cands.length;i++){ if(fso.FileExists(cands[i])){ EXE=cands[i]; EXE_DIR=parentDir(cands[i]); return true; } }
+  EXE=""; EXE_DIR=dir||""; return false;
+}
+function checkDeps(){
+  // framework-dependent builds ship LECmd.dll + runtimeconfig next to the exe; self-contained net4 has neither
+  var fso=new ActiveXObject("Scripting.FileSystemObject"); var miss=[];
+  if(!EXE_DIR) return ["(install folder unknown)"];
+  if(fso.FileExists(EXE_DIR+"\\LECmd.runtimeconfig.json") && !fso.FileExists(EXE_DIR+"\\LECmd.dll")) miss.push("LECmd.dll");
+  return miss;
+}
+function verTuple(v){ var p=String(v).split("."); var a=[]; for(var i=0;i<p.length;i++) a.push(parseInt(p[i],10)||0); return a; }
+function verCmp(a,b){ a=verTuple(a); b=verTuple(b); var n=Math.max(a.length,b.length);
+  for(var i=0;i<n;i++){ var x=a[i]||0,y=b[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
+function fetchLatest(){
+  LATEST_VER=KNOWN_LATEST_LECMD; WEB_OK=false;
+  try{
+    var x=new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
+    x.setTimeouts(2000,3000,4000,4000);
+    x.open("GET", LECMD_PAGE, false); x.send();
+    // the page lists JLECmd and SQLECmd too — anchor on a non-letter before "LECmd" so we don't scrape those
+    if(x.status===200){ WEB_OK=true; var t=x.responseText+""; var m=t.match(/(?:^|[^A-Za-z])LECmd[\s\S]{0,800}?(\d+\.\d+\.\d+)/i); if(m) LATEST_VER=m[1]; }
+  }catch(e){ WEB_OK=false; }
+  return LATEST_VER;
+}
+function updateVerPill(){
+  var s=LOCAL_VER?("LECmd v"+esc(LOCAL_VER)):"LECmd: not found";
+  if(!WEB_OK){ s+=" &middot; <span style='color:#8b949e'>no internet / no web source</span>"; }
+  else if(LATEST_VER){
+    if(LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0) s+=" &middot; <span style='color:#d29922'>update v"+esc(LATEST_VER)+" available</span>";
+    else if(LOCAL_VER) s+=" &middot; <span style='color:#3fb950'>latest</span>";
+    else s+=" &middot; latest v"+esc(LATEST_VER);
+  }
+  $("verpill").innerHTML=s;
+}
+function evaluateTooling(promptIfNeeded){
+  var dir=htaFolder();
+  var localComplete = dir ? fileExists(dir+"\\LECmd.exe") : false;   // exe next to the .hta (self-contained)
+  var found=resolveExe();
+  if(EXE) $("exeline").innerHTML="Tool: "+esc(EXE)+"  &middot;  run with DOTNET_ROLL_FORWARD=Major (covers .NET 9-target builds)";
+  else $("exeline").innerHTML='<span class="err">LECmd.exe not found next to this app ('+esc(dir||"app folder")+') or in C:\\ZimmermanTools</span>';
+  if(found) checkVersion(); else { LOCAL_VER=""; }
+  fetchLatest(); updateVerPill();
+  if(found){ var miss=checkDeps(); if(miss.length) setStatus("LECmd support files missing next to the exe: "+miss.join(", "),"err"); }
+  if(!promptIfNeeded) return;
+  if(localComplete){
+    if(WEB_OK && LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0){
+      if(confirm("A newer LECmd is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
+    }
+  } else {
+    if(WEB_OK){
+      var msg = (found ? ("LECmd is not set up next to this app (currently using "+EXE+").\n\n") : "LECmd.exe was not found.\n\n")
+        + "Download the latest (v"+LATEST_VER+") to a self-contained copy next to the app at:\n"+(dir||"?")+"\n\nProceed?";
+      if(confirm(msg)) downloadLatest();
+    } else if(found){
+      setStatus("Using local LECmd ("+EXE+") — no internet to reach Zimmerman Tools, so can't verify/download the latest.","muted");
+    } else {
+      setStatus("LECmd.exe not found next to this .hta and no internet to download it. Place LECmd.exe (net6/net9 build) next to this .hta.","err");
+    }
+  }
+}
+function downloadLatest(){
+  var target=htaFolder()||EXE_DIR;   // always install next to the .hta (self-contained)
+  if(!target){ setStatus("Cannot determine the app folder to install into","err"); return; }
+  if(!WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading LECmd from\n"+LECMD_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
+  if(WEB_OK && !confirm("Download latest LECmd (v"+(LATEST_VER||KNOWN_LATEST_LECMD)+") from:\n"+LECMD_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
+  setStatus("Downloading & installing LECmd… (give it a moment)","muted");
+  var tq=String(target).replace(/'/g,"''");
+  var ps="$ErrorActionPreference='Stop';"
+    +"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+    +"$u='"+LECMD_ZIP_URL+"';"
+    +"$z=Join-Path $env:TEMP 'LECmd_dl.zip';"
+    +"$x=Join-Path $env:TEMP ('LECmd_x_'+[guid]::NewGuid().ToString('N'));"
+    +"Invoke-WebRequest -Uri $u -OutFile $z;"
+    +"Expand-Archive -Force -Path $z -DestinationPath $x;"
+    +"$exe=Get-ChildItem -Path $x -Recurse -Filter LECmd.exe | Select-Object -First 1;"
+    +"if(-not $exe){throw 'LECmd.exe not found in downloaded archive'};"
+    +"$src=Split-Path $exe.FullName;"
+    +"New-Item -ItemType Directory -Force -Path '"+tq+"' | Out-Null;"
+    +"Copy-Item -Path (Join-Path $src '*') -Destination '"+tq+"' -Recurse -Force;"
+    +"Remove-Item $z,$x -Recurse -Force -ErrorAction SilentlyContinue;"
+    +"Write-Output 'INSTALL_OK'";
+  try{
+    var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+ps+'" > "__LOG__" 2>&1']);
+    appendLog("--- LECmd download / install ---\n"+r.log);
+    if((r.log+"").indexOf("INSTALL_OK")>=0){ setStatus("LECmd installed to "+target,"ok"); evaluateTooling(false); }
+    else setStatus("Download/install failed — see log","err");
+  }catch(e){ setStatus("Download failed: "+e.message,"err"); }
+}
+
+/* ---------- actions ---------- */
+function checkVersion(){
+  if(!EXE || !fileExists(EXE)){ LOCAL_VER=""; updateVerPill(); setStatus("LECmd.exe not found — use 'Update / download LECmd'","err"); return; }
+  try{
+    // LECmd crashes at Console.WindowWidth if run with NO args in a non-interactive host (net4 AND net6) — but
+    // `--version` prints just the version and needs no console, so use it (differs from the PECmd wrapper).
+    var r=runBat([
+      "set DOTNET_ROLL_FORWARD=Major",
+      '"'+EXE+'" --version > "__LOG__" 2>&1'
+    ]);
+    var m=r.log.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/);
+    if(m){ LOCAL_VER=m[1]; updateVerPill(); setStatus("LECmd v"+LOCAL_VER+" detected","ok"); }
+    else { LOCAL_VER=""; updateVerPill(); setStatus("Ran LECmd but could not parse version — see log","err"); appendLog(r.log); }
+  }catch(e){ LOCAL_VER=""; updateVerPill(); setStatus("Version check failed: "+e.message,"err"); }
+}
+
+/* can we actually enumerate this folder? (other users' Recent folders are ACL'd) */
+function canListFolder(p){
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var e=new Enumerator(fso.GetFolder(p).Files); e.atEnd(); return true; }catch(err){ return false; }
+}
+
+function processLnk(){
+  var inp=$("inPath").value;
+  var outdir=$("outDir").value;
+  var inmode=$("inMode").value;   // "f" file, "d" directory
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(inmode==="d"){
+    if(!inp||!fso.FolderExists(inp)){ setStatus("Directory not found: "+inp,"err"); return; }
+    if(!canListFolder(inp)){ setStatus("Access denied reading "+inp+" — that folder needs an ELEVATED run (another user's profile, or a protected path). Relaunch as administrator, or point at a collected copy instead.","err"); return; }
+  }
+  else { if(!inp||!fso.FileExists(inp)){ setStatus("File not found: "+inp,"err"); return; } }
+  if(!outdir){ setStatus("Set an output directory","err"); return; }
+  if(!EXE||!fileExists(EXE)){ setStatus("LECmd.exe not found — download it first","err"); return; }
+  var flag=(inmode==="d")?"-d":"-f";
+  var extra="";
+  if(inmode==="d" && $("optQuiet").checked) extra+=" -q";
+  if(inmode==="d" && $("optAll").checked) extra+=" --all";
+  if(inmode==="d" && $("optR").checked) extra+=" -r";
+  if($("optMp").checked) extra+=" --mp";
+  var before=csvNameSet(outdir);
+  if(BUSY){ setStatus("A LECmd run is already in progress — wait for it to finish.","err"); return; }
+  appendLog("Running: \""+EXE+"\" "+flag+" \""+inp+"\" --csv \""+outdir+"\""+extra
+    +"\nA console window shows progress; the app stays responsive and loads results automatically when done.");
+  BUSY=true; $("procBtn").disabled=true;
+  var binp=batEsc(inp), bout=batEsc(outdir);
+  var ctx=runBatAsync([
+    "set DOTNET_ROLL_FORWARD=Major",
+    'if not exist "'+bout+'" mkdir "'+bout+'"',
+    "echo LECmd is processing:",
+    'echo   '+binp,
+    "echo Output: "+bout,
+    "echo This window closes automatically when finished.",
+    "echo.",
+    '"'+batEsc(EXE)+'" '+flag+' "'+binp+'" --csv "'+bout+'"'+extra+' > "__LOG__" 2>&1'
+  ], true);
+  ctx.onTick=function(s){ setStatus("LECmd running… "+s+"s elapsed (app responsive; results load when done)","muted"); };
+  ctx.onTimeout=function(){ BUSY=false; $("procBtn").disabled=false; setStatus("LECmd still running after 30 min — stopped watching. Check the output folder / console window.","err"); };
+  ctx.onDone=function(log){ BUSY=false; $("procBtn").disabled=false; processLnkDone(log,outdir,before); };
+  setStatus("LECmd starting…","muted");
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+function processLnkDone(log,outdir,before){
+  appendLog("--- LECmd output ---\n"+log);
+  LASTOUTDIR=outdir;
+  var all=listCsvFiles(outdir);
+  var fresh=[]; for(var i=0;i<all.length;i++){ if(!before[all[i].name]) fresh.push(all[i]); }
+  if(!fresh.length){
+    if(/denied|unauthorized/i.test(log))
+      setStatus("LECmd was denied access to the input — an elevated run may be needed for a protected folder.","err");
+    else if(/Processed 0 out of 0|Found 0/i.test(log))
+      setStatus("LECmd found 0 shortcuts in that folder — check the path holds .lnk files (or tick 'all files' for non-.lnk shortcuts).","err");
+    else
+      setStatus("LECmd produced no new CSV — no shortcut files found in the input, or every file failed to parse. See the log.","err");
+    populateProduced(all);
+    return;
+  }
+  // "Extra data found in ..." is a benign parser note, not a failure — don't count it as an error
+  var errs=(log.match(/(^|\n)\s*(error|failed|unable)/gi)||[]).length;
+  var errNote = errs ? (" — note: "+errs+" file(s) reported a parse problem (see log; expected when 'all files' is on).") : "";
+  PRODUCED=fresh;
+  populateProduced(fresh);
+  var main=null;
+  for(var j=0;j<fresh.length;j++){ if(/_LECmd_Output\.csv$/i.test(fresh[j].name)){ if(!main||fresh[j].name>main.name) main=fresh[j]; } }
+  if(!main){ main=fresh[0]; for(var k=1;k<fresh.length;k++){ if(fresh[k].size>main.size) main=fresh[k]; } }
+  try{ $("producedSel").value=main.path; }catch(e){}
+  setStatus("Produced "+fresh.length+" CSV(s); loaded "+main.name+"."+errNote,"ok");
+  loadCsvFile(main.path);
+}
+function csvNameSet(dir){ var o={}, l=listCsvFiles(dir); for(var i=0;i<l.length;i++) o[l[i].name]=true; return o; }
+function listCsvFiles(dir){
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), out=[];
+  if(!fso.FolderExists(dir)) return out;
+  var e=new Enumerator(fso.GetFolder(dir).Files);
+  for(; !e.atEnd(); e.moveNext()){ var f=e.item(); if(/\.csv$/i.test(f.Name+"")) out.push({name:f.Name+"", path:f.Path+"", size:f.Size}); }
+  out.sort(function(a,b){ return a.name<b.name?1:(a.name>b.name?-1:0); });   // newest timestamp-prefix first
+  return out;
+}
+function fmtSize(n){ if(!n) return "0 B"; var u=["B","KB","MB","GB"], i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
+function populateProduced(list){
+  var sel=$("producedSel"); sel.innerHTML="";
+  for(var i=0;i<list.length;i++){
+    var lab=list[i].name+"  ("+fmtSize(list[i].size)+")";
+    if(/_LECmd_Output\.csv$/i.test(list[i].name)) lab+="  —  one row per shortcut";
+    var o=document.createElement("option"); o.value=list[i].path; o.text=lab; sel.add(o);
+  }
+  showEl("producedRow", list.length>0);
+}
+function openDir(){ var d=$("outDir").value; if(!d){ setStatus("No output directory set","err"); return; }
+  try{ new ActiveXObject("WScript.Shell").Run('explorer.exe "'+d+'"',1,false); }catch(e){ setStatus("Could not open folder: "+e.message,"err"); } }
+
+/* ---------- CSV parser (RFC4180) — line-split hybrid ---------- */
+function countQuotes(s){ var c=0, idx=-1; while((idx=s.indexOf('"',idx+1))>=0) c++; return c; }
+function parseCSVLine(line){
+  if(line.indexOf('"')<0) return line.split(",");   // fast path: no quotes → plain split
+  var out=[], field="", q=false, i=0, n=line.length;
+  while(i<n){ var c=line.charAt(i);
+    if(q){ if(c==='"'){ if(line.charAt(i+1)==='"'){ field+='"'; i+=2; continue; } q=false; i++; continue; } field+=c; i++; continue; }
+    if(c==='"'){ q=true; i++; continue; }
+    if(c===','){ out.push(field); field=""; i++; continue; }
+    field+=c; i++;
+  }
+  out.push(field); return out;
+}
+function parseCSV(text){
+  if(text.charCodeAt(0)===0xFEFF) text=text.substring(1);
+  var lines=text.split("\n"), rows=[], i=0, n=lines.length;
+  while(i<n){
+    var line=lines[i]; i++;
+    var qc=countQuotes(line);
+    while((qc%2)===1 && i<n){ line+="\n"+lines[i]; qc+=countQuotes(lines[i]); i++; }
+    if(line.charAt(line.length-1)==='\r') line=line.substring(0,line.length-1);
+    if(line==="") continue;
+    rows.push(parseCSVLine(line));
+  }
+  return rows;
+}
+
+/* ---------- ingest dispatch ---------- */
+function loadCsvFile(path){
+  try{
+    var text=readUtf8(path);
+    var raw=parseCSV(text);
+    if(!raw||!raw.length){ setStatus("Empty / unparseable CSV","err"); return; }
+    var idx={}, head=raw[0];
+    for(var h=0;h<head.length;h++) idx[trimStr(head[h])]=h;
+    if(("SourceFile" in idx) && ("Arguments" in idx) && (("TargetIDAbsolutePath" in idx)||("MachineID" in idx)||("LocalPath" in idx)))
+      ingestLnk(raw, idx, baseName(path));
+    else
+      ingestGeneric(raw, head, baseName(path));
+  }catch(e){ setStatus("Could not read CSV: "+e.message,"err"); }
+}
+function cell(rw,i){ return (i>=0&&i<rw.length)?rw[i]:""; }
+function numv(v){ var x=parseFloat(v); return isFinite(x)?x:0; }
+function splitCell(raw){ if(!raw) return []; var a=String(raw).split(", "); var out=[]; for(var i=0;i<a.length;i++){ var s=trimStr(a[i]); if(s) out.push(s); } return out; }
+function statSize(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(fso.FileExists(p)) return fso.GetFile(p).Size; }catch(e){} return null; }
+
+/* ---------- LNK ingest (spec §7) ---------- */
+function ingestLnk(raw, idx, srcLabel){
+  function gi(n){ return (n in idx)?idx[n]:-1; }
+  var iSrc=gi("SourceFile"), iSC=gi("SourceCreated"), iSM=gi("SourceModified"), iSA=gi("SourceAccessed"),
+      iTC=gi("TargetCreated"), iTM=gi("TargetModified"), iTA=gi("TargetAccessed"),
+      iFS=gi("FileSize"), iRP=gi("RelativePath"), iWD=gi("WorkingDirectory"),
+      iFA=gi("FileAttributes"), iHF=gi("HeaderFlags"), iDT=gi("DriveType"),
+      iVS=gi("VolumeSerialNumber"), iVL=gi("VolumeLabel"),
+      iLP=gi("LocalPath"), iNP=gi("NetworkPath"), iCP=gi("CommonPath"), iArg=gi("Arguments"),
+      iTID=gi("TargetIDAbsolutePath"), iMID=gi("MachineID"), iMAC=gi("MachineMACAddress"),
+      iMV=gi("MACVendor"), iTCO=gi("TrackerCreatedOn"), iEB=gi("ExtraBlocksPresent");
+  ROWS=[];
+  for(var r=1;r<raw.length;r++){
+    var rw=raw[r]; if(rw.length<3) continue;
+    var src=trimStr(cell(rw,iSrc)); if(!src) continue;
+    var localPath=trimStr(cell(rw,iLP)), networkPath=trimStr(cell(rw,iNP)), targetId=trimStr(cell(rw,iTID)),
+        commonPath=trimStr(cell(rw,iCP)), relPath=trimStr(cell(rw,iRP)), workDir=trimStr(cell(rw,iWD));
+    var targetPath = localPath || networkPath || targetId || commonPath || (workDir && relPath ? (workDir+"\\"+baseName(relPath)) : (relPath||""));
+    var targetName = baseName(targetPath) || baseName(src).replace(/\.lnk$/i,"");
+    var args=cell(rw,iArg);
+    var driveType=trimStr(cell(rw,iDT)), volSerial=trimStr(cell(rw,iVS)), volLabel=trimStr(cell(rw,iVL));
+    var machineId=trimStr(cell(rw,iMID));
+    var isNetwork = (networkPath!=="") || /^\\\\/.test(targetPath);
+    var isRemovable = /removable/i.test(driveType);
+    var lnkSize = statSize(src);
+    var srcCreated=cell(rw,iSC), srcModified=cell(rw,iSM);
+    var rec={
+      src:src, srcName:baseName(src),
+      srcCreated:srcCreated, srcModified:srcModified, srcAccessed:cell(rw,iSA),
+      tgtCreated:cell(rw,iTC), tgtModified:cell(rw,iTM), tgtAccessed:cell(rw,iTA),
+      targetPath:targetPath, targetPathL:targetPath.toLowerCase(),
+      targetName:targetName, targetNameL:targetName.toLowerCase(), ext:extOf(targetName),
+      args:args, argsL:String(args).toLowerCase(),
+      localPath:localPath, networkPath:networkPath, commonPath:commonPath, targetId:targetId,
+      relPath:relPath, workDir:workDir,
+      driveType:driveType, volSerial:volSerial, volLabel:volLabel,
+      machineId:machineId, mac:cell(rw,iMAC), macVendor:cell(rw,iMV), trackerCreated:cell(rw,iTCO),
+      headerFlags:splitCell(cell(rw,iHF)), fileAttrs:splitCell(cell(rw,iFA)), extraBlocks:splitCell(cell(rw,iEB)),
+      targetSize:numv(cell(rw,iFS)), lnkSize:lnkSize,
+      isNetwork:isNetwork, isRemovable:isRemovable,
+      msCreated:msOf(srcCreated), dayCreated:dayOf(srcCreated),
+      msModified:msOf(srcModified), dayModified:dayOf(srcModified),
+      tags:[], reasons:[], score:0, sus:false, recent:false, dup:false, foreign:false
+    };
+    rec.blob=(targetPath+" "+targetName+" "+args+" "+src+" "+workDir+" "+relPath+" "+volLabel+" "+volSerial+" "+machineId+" "+networkPath+" "+commonPath+" "+targetId).toLowerCase();
+    ROWS.push(rec);
+  }
+  if(!ROWS.length){ ingestGeneric(raw, raw[0], srcLabel); return; }
+  buildEvents();
+  rescoreAll();
+  setMode("lnk");
+  populateSourceFilter([]);
+  $("results").className="";
+  $("srcpill").innerHTML=nf(ROWS.length)+" shortcuts &middot; "+nf(EVENTS.length)+" events &middot; "+esc(srcLabel);
+  QUERY=""; $("q").value=""; DFROM=0; DTO=0; $("dfrom").value=""; $("dto").value="";
+  CURCAT="all"; highlightCat();
+  SORTKEY=5; SORTDIR=-1; TSORTKEY=1; TSORTDIR=-1;
+  setView("links", true);
+  closeDetail();
+  setStatus("Loaded "+nf(ROWS.length)+" shortcuts ("+nf(EVENTS.length)+" activity events)","ok");
+  render();
+}
+function buildEvents(){
+  EVENTS=[];
+  for(var e=0;e<ROWS.length;e++){ var r=ROWS[e];
+    if(r.srcCreated){ EVENTS.push({t:r.srcCreated, ms:r.msCreated, day:r.dayCreated, which:"first opened", kind:"open", rec:r}); }
+    if(r.srcModified && r.srcModified!==r.srcCreated){ EVENTS.push({t:r.srcModified, ms:r.msModified, day:r.dayModified, which:"last opened", kind:"open", rec:r}); }
+    if(SHOW_TGT){
+      if(r.tgtCreated){ EVENTS.push({t:r.tgtCreated, ms:msOf(r.tgtCreated), day:dayOf(r.tgtCreated), which:"target created", kind:"tgt", rec:r}); }
+      if(r.tgtModified && r.tgtModified!==r.tgtCreated){ EVENTS.push({t:r.tgtModified, ms:msOf(r.tgtModified), day:dayOf(r.tgtModified), which:"target modified", kind:"tgt", rec:r}); }
+    }
+  }
+}
+
+/* ---------- suspicion scoring (spec §8, L1–L10) ---------- */
+function isUserPath(pL){ if(!pL) return false;
+  if(pL.indexOf("\\programdata\\microsoft\\windows defender\\")>=0) return false;   // Defender platform — chronic FP
+  for(var i=0;i<USERPATHS.length;i++){ if(pL.indexOf(USERPATHS[i])>=0) return true; } return false; }
+function targetBase(nameL){ return nameL.replace(/\.(exe|com|scr|bat|cmd|pif|dll)$/,""); }
+function rescoreAll(){
+  var i, rec;
+  var maxMs=0;
+  for(i=0;i<ROWS.length;i++){ if(ROWS[i].msModified>maxMs) maxMs=ROWS[i].msModified; }
+  var recentCut=maxMs?(maxMs-RECENT_DAYS*86400000):0;
+  // duplicate pass: same target opened at the same first-open time = a shadow/roaming copy
+  var byKey={}, mach={};
+  for(i=0;i<ROWS.length;i++){ rec=ROWS[i];
+    var key=rec.targetPathL+"|"+rec.srcCreated; byKey[key]=(byKey[key]||0)+1;
+    if(rec.machineId) mach[rec.machineId]=(mach[rec.machineId]||0)+1;
+  }
+  var machIds=[], topMach="", topN=-1, k;
+  for(k in mach){ if(mach.hasOwnProperty(k)){ machIds.push(k); if(mach[k]>topN){ topN=mach[k]; topMach=k; } } }
+  for(i=0;i<ROWS.length;i++){ rec=ROWS[i];
+    rec.dup=(byKey[rec.targetPathL+"|"+rec.srcCreated]>1);
+    rec.foreign=(machIds.length>1 && rec.machineId && rec.machineId!==topMach);
+    scoreRec(rec, recentCut);
+  }
+}
+function scoreRec(rec, recentCut){
+  var tags=[], reasons=[], score=0;
+  rec.recent=(recentCut && rec.msModified>=recentCut);
+  // L1 WEAPON + L2 ARGS
+  if(trimStr(rec.args)!==""){
+    if(LOLARG.test(rec.argsL)){ score+=3; tags.push("WEAPON");
+      reasons.push("Arguments match a LOLBIN / download / encoded-command pattern — classic weaponized-shortcut behavior"); }
+    score+=1; tags.push("ARGS"); reasons.push("Shortcut carries command-line arguments: "+truncate(rec.args,140));
+  }
+  // L3 EXEC
+  if(EXECEXT[rec.ext]){ score+=1; tags.push("EXEC"); reasons.push("Target is an executable/script (."+rec.ext+")");
+    if(isUserPath(rec.targetPathL)){ score+=1; reasons.push("…and that executable target sits under a user-writable path"); } }
+  // L4 USERPATH
+  if(isUserPath(rec.targetPathL)){ score+=1; tags.push("USERPATH"); reasons.push("Target under a user-writable / staging path: "+rec.targetPath); }
+  // L5 DBLEXT / RLO
+  if(DBLEXT.test(rec.targetNameL) || DBLEXT.test(rec.srcName.toLowerCase()) || /‮/.test(rec.targetName) || /‮/.test(rec.srcName)){
+    score+=2; tags.push("DBLEXT"); reasons.push("Double extension or right-to-left-override in the name — a masquerade trick"); }
+  // L6 MASQ
+  var tb=targetBase(rec.targetNameL);
+  if(OSNAMES[tb] && rec.targetPathL && rec.targetPathL.indexOf("\\windows\\")<0){
+    score+=3; tags.push("MASQ"); reasons.push("OS-binary name as a shortcut target OUTSIDE \\Windows\\: "+rec.targetPath); }
+  // L7 IOC
+  if(IOCS.length){
+    var hits=[], t;
+    for(t=0;t<IOCS.length;t++){ if(rec.blob.indexOf(IOCS[t])>=0){ hits.push(IOCS[t]); if(hits.length>=3) break; } }
+    if(hits.length){ score+=3; tags.push("IOC"); reasons.push("IOC/keyword hit: "+hits.join(", ")); }
+  }
+  // L8 BIGLNK
+  if(rec.lnkSize!=null && rec.lnkSize>5120){ score+=1; tags.push("BIGLNK");
+    reasons.push("The .lnk file itself is "+fmtSize(rec.lnkSize)+" — normal shell shortcuts are 1–3 KB; large ones can embed a payload"); }
+  // L9 NET / L10 USB — tag-only (routine on real networks)
+  if(rec.isNetwork){ tags.push("NET"); reasons.push("Target is a network / UNC path"+(rec.networkPath?(": "+rec.networkPath):"")); }
+  if(rec.isRemovable){ tags.push("USB"); reasons.push("Target is on removable media"+(rec.volLabel?(" ("+rec.volLabel+")"):"")); }
+  if(rec.dup){ tags.push("DUP"); }
+  if(rec.foreign){ tags.push("FOREIGN"); reasons.push("Created on a different machine than most shortcuts in this set: "+rec.machineId); }
+  rec.tags=tags; rec.reasons=reasons; rec.score=score; rec.sus=(score>=2);
+}
+
+/* ---------- aggregates / overview ---------- */
+function topList(obj,n){ var a=[],k; for(k in obj){ if(obj.hasOwnProperty(k)) a.push([k,obj[k]]); }
+  a.sort(function(x,y){ return y[1]-x[1]; }); return a.slice(0,n); }
+function stat(n,l){ return '<span class="stat"><span class="n">'+esc(n)+'</span><span class="l">'+esc(l)+'</span></span>'; }
+function bar(label,frac,val,q){
+  var lc=q?' lnk" data-q="'+esc(q):'';
+  return '<div class="brow"><span class="blab'+lc+'" title="'+esc(label)+'">'+esc(label)+'</span>'
+    +'<span class="btrack"><span class="bfill" style="width:'+(frac*100).toFixed(1)+'%"></span></span>'
+    +'<span class="bval">'+esc(val)+'</span></div>';
+}
+function listRow(label,val,q,cls){
+  var lc=q?' lnk" data-q="'+esc(q):'';
+  return '<div class="brow"><span class="blab'+lc+'" title="'+esc(label)+'" style="width:52%">'+esc(label)+'</span>'
+    +'<span class="bval" style="width:44%;'+(cls||"")+'">'+esc(val)+'</span></div>';
+}
+function fmtShortTs(s){ var m=String(s).match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/); return m?(m[1]+" "+m[2]):String(s); }
+function distinctCount(obj){ var n=0,k; for(k in obj){ if(obj.hasOwnProperty(k)) n++; } return n; }
+function msToTs(ms){ var d=new Date(ms); function p(x){return (x<10?"0":"")+x;}
+  return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "+p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds()); }
+function hasTag(r,t){ for(var i=0;i<r.tags.length;i++){ if(r.tags[i]===t) return true; } return false; }
+function renderLnkAgg(rows){
+  var i, r;
+  var tgts={}, vols={}, machs={}, susN=0, iocN=0, minMs=0, maxMs=0;
+  for(i=0;i<rows.length;i++){ r=rows[i];
+    tgts[r.targetNameL]=1;
+    if(r.volSerial||r.volLabel){ var vk=r.volSerial||r.volLabel; if(!vols[vk]) vols[vk]={label:r.volLabel,serial:r.volSerial,drive:r.driveType,removable:r.isRemovable,n:0}; vols[vk].n++; }
+    if(r.machineId) machs[r.machineId]=(machs[r.machineId]||0)+1;
+    if(r.sus) susN++;
+    if(hasTag(r,"IOC")) iocN++;
+    var mm=r.msModified||r.msCreated;
+    if(mm){ if(!minMs||mm<minMs) minMs=mm; if(mm>maxMs) maxMs=mm; }
+  }
+  var rng=(minMs? (fmtShortTs(msToTs(minMs))+" → "+fmtShortTs(msToTs(maxMs))) : "—");
+  $("statbar").innerHTML=
+    stat(nf(rows.length),"shortcuts")+stat(nf(distinctCount(tgts)),"targets")+stat(nf(distinctCount(vols)),"volumes")+
+    stat(nf(distinctCount(machs)),"machines")+stat(nf(susN),"suspicious")+(IOCS.length?stat(nf(iocN),"IOC hits"):"")+
+    '<span class="stat" style="min-width:260px"><span class="n" style="font-size:12px">'+esc(rng)+'</span><span class="l">last-opened range (UTC)</span></span>';
+  // col 1: recently opened (newest SourceModified)
+  var byNew=rows.slice(0); byNew.sort(function(a,b){ return (b.msModified||b.msCreated)-(a.msModified||a.msCreated); });
+  var h=""; for(i=0;i<byNew.length&&i<12;i++){ r=byNew[i]; h+=listRow(r.targetName, fmtShortTs(r.srcModified||r.srcCreated), r.targetName); }
+  $("topRecent").innerHTML=h||'<span class="muted">none</span>';
+  // col 2: volumes & origins
+  var va=[],vk2; for(vk2 in vols){ if(vols.hasOwnProperty(vk2)) va.push(vols[vk2]); }
+  va.sort(function(a,b){ return b.n-a.n; });
+  h=""; for(i=0;i<va.length&&i<8;i++){ var v=va[i];
+    var lab=(v.label||"(no label)")+" · "+(v.serial||"?")+(v.removable?"  ⚠USB":"");
+    h+=listRow(lab, nf(v.n), v.serial||v.label, v.removable?"color:#b083f0":""); }
+  var ma=topList(machs,6);
+  if(ma.length){ h+='<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin:8px 0 2px">Machine IDs</div>';
+    for(i=0;i<ma.length;i++){ h+=listRow(ma[i][0], nf(ma[i][1]), ma[i][0]); } }
+  $("topVols").innerHTML=h||'<span class="muted">none</span>';
+  // col 3: suspicious, score-ranked
+  var sus=[]; for(i=0;i<rows.length;i++){ if(rows[i].sus) sus.push(rows[i]); }
+  sus.sort(function(a,b){ return b.score-a.score || (b.msModified-a.msModified); });
+  h=""; for(i=0;i<sus.length&&i<12;i++){ r=sus[i];
+    h+=listRow(r.targetName+"  ["+r.tags.join(",")+"]", "score "+r.score, r.targetName, "color:#ff6b6b"); }
+  $("topSus").innerHTML=h||'<span class="ok">No suspicious shortcuts</span>';
+}
+
+/* ---------- tag rendering ---------- */
+function tagHtml(r){
+  var t="",i;
+  if(r.sus) t+='<span class="tag sus" title="'+esc(r.reasons.join("; "))+'">SUS '+r.score+'</span>';
+  for(i=0;i<r.tags.length;i++){ var g=r.tags[i], cls="gen";
+    if(g==="WEAPON") cls="weapon"; else if(g==="USERPATH") cls="usr"; else if(g==="ARGS"||g==="EXEC") cls="lol";
+    else if(g==="BIGLNK"||g==="USB") cls="rare"; else if(g==="IOC"||g==="MASQ"||g==="DBLEXT") cls="ioc";
+    t+='<span class="tag '+cls+'" title="'+esc(r.reasons.join("; "))+'">'+esc(g)+'</span>'; }
+  return t;
+}
+
+/* ---------- links table ---------- */
+function driveShort(dt){ dt=String(dt); if(/removable/i.test(dt)) return "Removable"; if(/fixed/i.test(dt)) return "Fixed";
+  if(/network/i.test(dt)) return "Network"; if(/optical|cd/i.test(dt)) return "Optical"; if(/ram/i.test(dt)) return "RAM"; return dt||"—"; }
+var COLS=[
+  {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
+  {h:"Target", sk:function(r){return r.targetNameL;}, cell:function(r){return '<td class="mono lnk" data-q="'+esc(r.targetName)+'" title="'+esc(r.targetName)+'">'+esc(r.targetName)+'</td>';}},
+  {h:"Target path", sk:function(r){return r.targetPathL;}, cell:function(r){return '<td class="mono" title="'+esc(r.targetPath)+'">'+esc(r.targetPath||"—")+'</td>';}},
+  {h:"Arguments", sk:function(r){return r.argsL;}, cell:function(r){return '<td class="mono" title="'+esc(r.args)+'" style="'+(r.args?"color:#e6edf3":"")+'">'+esc(truncate(r.args,90)||"—")+'</td>';}},
+  {h:"First opened (UTC)", sk:function(r){return r.msCreated;}, cell:function(r){return '<td class="mono" title="lnk created — first time the target was opened">'+esc(r.srcCreated)+'</td>';}},
+  {h:"Last opened (UTC)", sk:function(r){return r.msModified;}, cell:function(r){return '<td class="mono" title="lnk last written — last time the target was opened">'+esc(r.srcModified)+'</td>';}},
+  {h:"Drive", sk:function(r){return String(r.driveType).toLowerCase();}, cell:function(r){return '<td class="'+(r.isRemovable?"":"muted")+'" title="'+esc(r.driveType)+'">'+esc(driveShort(r.driveType))+'</td>';}},
+  {h:"Volume", sk:function(r){return String(r.volLabel).toLowerCase();}, cell:function(r){return '<td class="mono muted" title="serial '+esc(r.volSerial)+'">'+esc(r.volLabel||"—")+'</td>';}},
+  {h:"Machine", sk:function(r){return String(r.machineId).toLowerCase();}, cell:function(r){return '<td class="mono muted">'+esc(r.machineId||"—")+'</td>';}},
+  {h:"Source .lnk", sk:function(r){return r.src.toLowerCase();}, cell:function(r){return '<td class="mono muted" title="'+esc(r.src)+'">'+esc(shortPathN(r.src,2))+'</td>';}}
+];
+function lnkPass(r){
+  if(CURCAT==="sus"&&!r.sus) return false;
+  if(CURCAT==="args"&&!hasTag(r,"ARGS")) return false;
+  if(CURCAT==="exec"&&!hasTag(r,"EXEC")) return false;
+  if(CURCAT==="net"&&!r.isNetwork) return false;
+  if(CURCAT==="usb"&&!r.isRemovable) return false;
+  if(CURCAT==="userpath"&&!hasTag(r,"USERPATH")) return false;
+  if(CURCAT==="recent"&&!r.recent) return false;
+  if(CURCAT==="ioc"&&!hasTag(r,"IOC")) return false;
+  if(QUERY && r.blob.indexOf(QUERY)<0) return false;
+  return true;
+}
+function filteredLnk(){
+  var out=[];
+  for(var i=0;i<ROWS.length;i++){ var r=ROWS[i];
+    if(DFROM&&(!r.dayModified||r.dayModified<DFROM)) continue;
+    if(DTO&&(!r.dayModified||r.dayModified>DTO)) continue;
+    if(!lnkPass(r)) continue;
+    out.push(r);
+  }
+  return out;
+}
+function updateCatCounts(){
+  var c={all:ROWS.length,sus:0,args:0,exec:0,net:0,usb:0,userpath:0,recent:0,ioc:0};
+  for(var i=0;i<ROWS.length;i++){ var r=ROWS[i];
+    if(r.sus)c.sus++; if(hasTag(r,"ARGS"))c.args++; if(hasTag(r,"EXEC"))c.exec++;
+    if(r.isNetwork)c.net++; if(r.isRemovable)c.usb++; if(hasTag(r,"USERPATH"))c.userpath++;
+    if(r.recent)c.recent++; if(hasTag(r,"IOC"))c.ioc++; }
+  var names={all:"All",sus:"Suspicious",args:"Args",exec:"Exec-target",net:"Network (UNC)",usb:"Removable",userpath:"User-path",recent:"Recent",ioc:"IOC hits"};
+  var bs=$("lnkCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ var k=bs[j].getAttribute("data-cat");
+    if(k) bs[j].innerHTML=names[k]+" ("+nf(c[k])+")"; }
+}
+function highlightCat(){
+  var bs=$("lnkCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ if(bs[j].getAttribute("data-cat")) bs[j].className=(bs[j].getAttribute("data-cat")===CURCAT)?"btn on":"btn"; }
+}
+function setView(v, quiet){
+  VIEW=v;
+  $("vLinks").className=(v==="links")?"btn on":"btn";
+  $("vTime").className=(v==="time")?"btn on":"btn";
+  $("tableTitle").innerHTML=(v==="time")?"Activity timeline":"Shortcuts";
+  if(!quiet) render();
+}
+function render(){
+  if(MODE==="generic"){ renderGeneric(); return; }
+  if(VIEW==="time"){ renderTime(); return; }
+  if(!ROWS.length) return;
+  var rows=filteredLnk();
+  renderLnkAgg(rows);
+  updateCatCounts();
+  var sk=COLS[SORTKEY].sk, dir=SORTDIR;
+  rows.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var html="<thead><tr>";
+  for(var c=0;c<COLS.length;c++){
+    var arrow=(SORTKEY===c)?(SORTDIR>0?" ▲":" ▼"):"";
+    html+='<th data-k="'+c+'">'+esc(COLS[c].h)+arrow+'</th>';
+  }
+  html+="</tr></thead><tbody>";
+  for(var i=0;i<shown;i++){
+    var r=rows[i];
+    html+='<tr data-i="'+i+'"'+(r.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<COLS.length;k++){ html+=COLS[k].cell(r); }
+    html+="</tr>";
+  }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  wireHeaders();
+  applyFreeze();
+  window.__viewRows=rows;
+}
+function wireHeaders(){
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var i=0;i<ths.length;i++){ ths[i].onclick=function(){
+    var k=parseInt(this.getAttribute("data-k"),10);
+    if(SORTKEY===k) SORTDIR*=-1; else { SORTKEY=k; SORTDIR=1; }
+    render();
+  }; }
+}
+function applyFreeze(){
+  var sc=$("tblScroll"); if(!sc) return;
+  var ths=$("tbl").getElementsByTagName("th"); var y=sc.scrollTop;
+  for(var i=0;i<ths.length;i++){ ths[i].style.top=y+"px"; }
+}
+
+/* ---------- timeline view (one row per activity event) ---------- */
+var TCOLS=[
+  {h:"Tags", sk:function(ev){return -ev.rec.score;}, cell:function(ev){return '<td class="first">'+tagHtml(ev.rec)+'</td>';}},
+  {h:"Event time (UTC)", sk:function(ev){return ev.ms;}, cell:function(ev){return '<td class="mono">'+esc(ev.t)+'</td>';}},
+  {h:"Event", sk:function(ev){return ev.which;}, cell:function(ev){return '<td class="'+(ev.kind==="tgt"?"muted":"")+'">'+esc(ev.which)+'</td>';}},
+  {h:"Target", sk:function(ev){return ev.rec.targetNameL;}, cell:function(ev){return '<td class="mono lnk" data-q="'+esc(ev.rec.targetName)+'" title="'+esc(ev.rec.targetName)+'">'+esc(ev.rec.targetName)+'</td>';}},
+  {h:"Target path", sk:function(ev){return ev.rec.targetPathL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.targetPath)+'">'+esc(ev.rec.targetPath||"—")+'</td>';}},
+  {h:"Args", sk:function(ev){return ev.rec.args?1:0;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.args)+'">'+(ev.rec.args?('<span style="color:#58a6ff">yes</span>'):'<span class="muted">—</span>')+'</td>';}},
+  {h:"Source .lnk", sk:function(ev){return ev.rec.src.toLowerCase();}, cell:function(ev){return '<td class="mono muted" title="'+esc(ev.rec.src)+'">'+esc(shortPathN(ev.rec.src,2))+'</td>';}}
+];
+function filteredTime(){
+  var out=[];
+  for(var i=0;i<EVENTS.length;i++){
+    var ev=EVENTS[i];
+    if(DFROM&&(!ev.day||ev.day<DFROM)) continue;
+    if(DTO&&(!ev.day||ev.day>DTO)) continue;
+    if(!lnkPass(ev.rec)) continue;
+    out.push(ev);
+  }
+  return out;
+}
+function renderTimeAgg(evs){
+  var i, ev, tok={};
+  var recs=[], sus=0, ioc=0, tgts={}, minMs=0, maxMs=0, evByName={};
+  for(i=0;i<evs.length;i++){ ev=evs[i];
+    if(ev.rec.__tok!==tok){ ev.rec.__tok=tok; recs.push(ev.rec); }
+    tgts[ev.rec.targetNameL]=1; evByName[ev.rec.targetName]=(evByName[ev.rec.targetName]||0)+1;
+    if(ev.rec.sus) sus++;
+    if(hasTag(ev.rec,"IOC")) ioc++;
+    if(ev.ms){ if(!minMs||ev.ms<minMs) minMs=ev.ms; if(ev.ms>maxMs) maxMs=ev.ms; }
+  }
+  var rng=(minMs? (fmtShortTs(msToTs(minMs))+" → "+fmtShortTs(msToTs(maxMs))) : "—");
+  $("statbar").innerHTML=
+    stat(nf(evs.length),"events")+stat(nf(recs.length),"shortcuts")+stat(nf(distinctCount(tgts)),"targets")+
+    stat(nf(sus),"suspicious")+(IOCS.length?stat(nf(ioc),"IOC-hit"):"")+
+    '<span class="stat" style="min-width:260px"><span class="n" style="font-size:12px">'+esc(rng)+'</span><span class="l">event range (UTC)</span></span>';
+  // col 1: most active targets in the window
+  var top=topList(evByName,12), h="", max=top.length?top[0][1]:1;
+  for(i=0;i<top.length;i++){ h+=bar(top[i][0], max?top[i][1]/max:0, nf(top[i][1]), top[i][0]); }
+  $("topRecent").innerHTML=h||'<span class="muted">none</span>';
+  // col 2: volumes among visible records
+  var vols={}; for(i=0;i<recs.length;i++){ var r=recs[i]; if(r.volSerial||r.volLabel){ var vk=r.volSerial||r.volLabel;
+    if(!vols[vk]) vols[vk]={label:r.volLabel,serial:r.volSerial,removable:r.isRemovable,n:0}; vols[vk].n++; } }
+  var va=[],vk2; for(vk2 in vols){ if(vols.hasOwnProperty(vk2)) va.push(vols[vk2]); }
+  va.sort(function(a,b){ return b.n-a.n; });
+  h=""; for(i=0;i<va.length&&i<10;i++){ var v=va[i]; h+=listRow((v.label||"(no label)")+" · "+(v.serial||"?")+(v.removable?"  ⚠USB":""), nf(v.n), v.serial||v.label, v.removable?"color:#b083f0":""); }
+  $("topVols").innerHTML=h||'<span class="muted">none</span>';
+  // col 3: suspicious among visible records
+  var s2=[]; for(i=0;i<recs.length;i++){ if(recs[i].sus) s2.push(recs[i]); }
+  s2.sort(function(a,b){ return b.score-a.score || (b.msModified-a.msModified); });
+  h=""; for(i=0;i<s2.length&&i<12;i++){ var r2=s2[i];
+    h+=listRow(r2.targetName+"  ["+r2.tags.join(",")+"]", "score "+r2.score, r2.targetName, "color:#ff6b6b"); }
+  $("topSus").innerHTML=h||'<span class="ok">No suspicious shortcuts</span>';
+}
+function renderTime(){
+  if(!EVENTS.length) return;
+  var evs=filteredTime();
+  renderTimeAgg(evs);
+  updateCatCounts();
+  var sk=TCOLS[TSORTKEY].sk, dir=TSORTDIR;
+  evs.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=evs.length>MAXROWS?MAXROWS:evs.length;
+  var html="<thead><tr>";
+  for(var c=0;c<TCOLS.length;c++){
+    var arrow=(TSORTKEY===c)?(TSORTDIR>0?" ▲":" ▼"):"";
+    html+='<th data-k="'+c+'">'+esc(TCOLS[c].h)+arrow+'</th>';
+  }
+  html+="</tr></thead><tbody>";
+  for(var i=0;i<shown;i++){
+    var ev=evs[i];
+    html+='<tr data-i="'+i+'"'+(ev.rec.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<TCOLS.length;k++){ html+=TCOLS[k].cell(ev); }
+    html+="</tr>";
+  }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(evs.length)+" events"+(shown<evs.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(){
+    var kk=parseInt(this.getAttribute("data-k"),10);
+    if(TSORTKEY===kk) TSORTDIR*=-1; else { TSORTKEY=kk; TSORTDIR=1; }
+    renderTime();
+  }; }
+  applyFreeze();
+  window.__viewRows=evs;
+}
+
+/* ---------- detail pane ---------- */
+function hlClassFor(entryL){
+  for(var t=0;t<IOCS.length;t++){ if(entryL.indexOf(IOCS[t])>=0) return "hl-ioc"; }
+  if(isUserPath(entryL)) return "hl-user";
+  return "";
+}
+function hlArgs(args){
+  var out=esc(args);
+  for(var t=0;t<IOCS.length;t++){ var term=IOCS[t]; if(!term) continue;
+    // case-insensitive highlight of IOC terms
+    var re=new RegExp("("+term.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig");
+    out=out.replace(re,'<span class="hl-ioc">$1</span>'); }
+  return out;
+}
+function kv(k,v,cls){ if(v==null||v==="") return ""; return '<div class="kv"><b>'+esc(k)+'</b><span class="'+(cls||"mono")+'">'+esc(v)+'</span></div>'; }
+function chips(arr){ if(!arr||!arr.length) return '<span class="muted">—</span>'; var h=""; for(var i=0;i<arr.length;i++) h+='<span class="chip">'+esc(arr[i])+'</span>'; return h; }
+function renderDetail(rec){
+  DETREC=rec;
+  var h='<div class="mono" style="font-size:14px;margin-bottom:6px"><b>'+esc(rec.targetName)+'</b>'
+    +(rec.targetPath?('  <span class="muted">—</span>  '+esc(rec.targetPath)):'  <span class="muted">— no target path recovered</span>')+'</div>';
+  h+='<div style="margin-bottom:6px">'+tagHtml(rec)+'</div>';
+  if(rec.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:8px">';
+    for(var q=0;q<rec.reasons.length;q++) h+="&bull; "+esc(rec.reasons[q])+"<br>"; h+='</div>'; }
+  // arguments
+  h+='<h3>Arguments</h3>';
+  if(trimStr(rec.args)!==""){ h+='<div class="argbox'+(LOLARG.test(rec.argsL)?" weapon":"")+'">'+hlArgs(rec.args)+'</div>'; }
+  else h+='<div class="muted" style="font-size:12px;margin:4px 0">(none — shell-generated Recent shortcuts normally have no arguments)</div>';
+  // timestamps with semantics
+  h+='<h3>Timestamps (UTC)</h3>';
+  h+=kv("First opened", rec.srcCreated+"  (lnk created)");
+  h+=kv("Last opened", rec.srcModified+"  (lnk last written)");
+  h+=kv("Source accessed", rec.srcAccessed+"  — unreliable: bumped by the collection/parse itself","muted");
+  h+=kv("Target created", rec.tgtCreated);
+  h+=kv("Target modified", rec.tgtModified);
+  h+=kv("Target accessed", rec.tgtAccessed);
+  // paths
+  h+='<h3>Path reconstructions</h3>';
+  h+=kv("Local path", rec.localPath);
+  h+=kv("Network path", rec.networkPath);
+  h+=kv("Common path", rec.commonPath);
+  h+=kv("Target ID (shell)", rec.targetId);
+  h+=kv("Relative path", rec.relPath);
+  h+=kv("Working dir", rec.workDir);
+  // volume & tracker
+  h+='<h3>Volume &amp; origin</h3>';
+  h+=kv("Drive type", rec.driveType);
+  h+=kv("Volume label", rec.volLabel);
+  h+=kv("Volume serial", rec.volSerial);
+  h+=kv("Machine ID", rec.machineId);
+  h+=kv("MAC address", rec.mac+(rec.macVendor&&!/unknown/i.test(rec.macVendor)?("  ("+rec.macVendor+")"):""));
+  h+=kv("Tracker created", rec.trackerCreated);
+  // sizes & flags
+  h+='<h3>Sizes &amp; flags</h3>';
+  h+=kv("Target size (at link time)", nf(rec.targetSize)+" bytes");
+  h+=kv(".lnk file size", rec.lnkSize!=null?(fmtSize(rec.lnkSize)+"  ("+nf(rec.lnkSize)+" bytes)"):"(source not reachable to stat)");
+  h+='<div class="kv"><b>Header flags</b>'+chips(rec.headerFlags)+'</div>';
+  h+='<div class="kv"><b>File attributes</b>'+chips(rec.fileAttrs)+'</div>';
+  h+='<div class="kv"><b>Extra blocks</b>'+chips(rec.extraBlocks)+'</div>';
+  h+='<div class="kv" style="margin-top:6px"><b>Source .lnk</b><span class="mono muted">'+esc(rec.src)+'</span></div>';
+  $("detBody").innerHTML=h;
+  showEl("detailCard",true);
+}
+function closeDetail(){ DETREC=null; showEl("detailCard",false); $("detBody").innerHTML=""; }
+function copyDetail(){
+  if(!DETREC){ setStatus("No record open","err"); return; }
+  var r=DETREC, out=[];
+  out.push(r.targetName+"  —  "+ (r.targetPath||"(target path unknown)"));
+  out.push("tags: "+(r.tags.length?r.tags.join(", "):"none")+"  score "+r.score);
+  for(var q=0;q<r.reasons.length;q++) out.push("  - "+r.reasons[q]);
+  if(trimStr(r.args)!=="") out.push("arguments: "+r.args);
+  out.push("first opened "+r.srcCreated+" (UTC); last opened "+r.srcModified+" (UTC)");
+  out.push("drive "+(r.driveType||"?")+"; volume "+(r.volLabel||"?")+" serial "+(r.volSerial||"?")+"; machine "+(r.machineId||"?"));
+  out.push("source .lnk: "+r.src+(r.lnkSize!=null?("  ("+fmtSize(r.lnkSize)+")"):""));
+  try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Record copied to clipboard","ok"); }
+  catch(e){ setStatus("Copy failed: "+e.message,"err"); }
+}
+
+/* ---------- generic grid (non-LNK CSVs) ---------- */
+function isNumStr(s){ s=trimStr(String(s)); return s!=="" && /^-?\d+(\.\d+)?$/.test(s); }
+function ingestGeneric(raw, head, srcLabel){
+  setMode("generic");
+  GHEAD=head; GROWS=[];
+  for(var i=1;i<raw.length;i++){ var rw=raw[i]; if(rw.length>=1 && !(rw.length===1 && rw[0]==="")) GROWS.push(rw); }
+  GSRC=srcLabel;
+  GSRCIDX=-1; for(var c=0;c<head.length;c++){ if(/^SourceFile(name)?$/i.test(trimStr(head[c]))){ GSRCIDX=c; break; } }
+  if(GSRCIDX>=0){ var sv=[]; for(var s=0;s<GROWS.length;s++) sv.push(GSRCIDX<GROWS[s].length?GROWS[s][GSRCIDX]:""); populateSourceFilter(distinctVals(sv)); }
+  else populateSourceFilter([]);
+  $("results").className="";
+  $("srcpill").innerHTML=nf(GROWS.length)+" rows &middot; "+esc(srcLabel)+" ("+GHEAD.length+" cols)";
+  QUERY=""; $("q").value=""; GSORTKEY=-1;
+  closeDetail();
+  setStatus("Loaded "+nf(GROWS.length)+" rows (generic table view)","ok");
+  renderGeneric();
+}
+function renderGeneric(){
+  if(!GHEAD) return;
+  var q=QUERY, rows=[];
+  for(var i=0;i<GROWS.length;i++){ var rw=GROWS[i];
+    if(SRCFILTER && GSRCIDX>=0 && (GSRCIDX<rw.length?rw[GSRCIDX]:"")!==SRCFILTER) continue;
+    if(q){ if(rw.join("  ").toLowerCase().indexOf(q)<0) continue; }
+    rows.push(rw);
+  }
+  if(GSORTKEY>=0){ var k=GSORTKEY, dir=GSORTDIR; rows=rows.slice(0);
+    rows.sort(function(a,b){ var x=(k<a.length?a[k]:""), y=(k<b.length?b[k]:"");
+      if(isNumStr(x)&&isNumStr(y)) return (parseFloat(x)-parseFloat(y))*dir;
+      x=String(x).toLowerCase(); y=String(y).toLowerCase(); return x<y?-dir:(x>y?dir:0); });
+  }
+  $("statbar").innerHTML=stat(nf(GROWS.length),"rows")+stat(nf(GHEAD.length),"columns")+stat(nf(rows.length),"matching")+
+    '<span class="stat" style="min-width:240px"><span class="n" style="font-size:12px">'+esc(GSRC)+'</span><span class="l">source</span></span>';
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var h="<thead><tr>";
+  for(var c=0;c<GHEAD.length;c++){ var ar=(GSORTKEY===c)?(GSORTDIR>0?" ▲":" ▼"):""; h+='<th data-k="'+c+'">'+esc(GHEAD[c])+ar+'</th>'; }
+  h+="</tr></thead><tbody>";
+  for(var r=0;r<shown;r++){ var row=rows[r]; h+="<tr>";
+    for(var c2=0;c2<GHEAD.length;c2++){ var v=(c2<row.length?row[c2]:""); h+='<td class="mono" title="'+esc(v)+'">'+esc(v)+'</td>'; }
+    h+="</tr>"; }
+  h+="</tbody>"; $("tbl").innerHTML=h;
+  $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var i2=0;i2<ths.length;i2++){ ths[i2].onclick=function(){ var kk=parseInt(this.getAttribute("data-k"),10);
+    if(GSORTKEY===kk) GSORTDIR*=-1; else { GSORTKEY=kk; GSORTDIR=1; } renderGeneric(); }; }
+  applyFreeze();
+  window.__viewRows=rows;
+}
+function setMode(m){
+  MODE=m; var lnk=(m==="lnk");
+  showEl("lnkCards",lnk); showEl("lnkCats",lnk); showEl("dateCtl",lnk); showEl("lnkFoot",lnk);
+  showEl("iocBtn",lnk); showEl("viewToggle",lnk);
+  if(!lnk){ showEl("iocWrap",false); closeDetail(); }
+  if(lnk) showEl("srcWrap",false);
+  $("ovTitle").innerHTML = lnk ? "Overview &mdash; reflects active filters" : "Overview";
+  $("tableTitle").innerHTML = lnk ? ((VIEW==="time")?"Activity timeline":"Shortcuts") : "Records";
+}
+
+/* ---------- export / copy ---------- */
+function cq(v){ v=(v==null)?"":String(v); return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
+function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
+  return d.getFullYear()+""+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+function exportView(){
+  if(MODE==="generic"){ exportGeneric(); return; }
+  if(VIEW==="time"){ exportTimeline(); return; }
+  var rows=window.__viewRows||[];
+  if(!rows.length){ setStatus("Nothing to export","err"); return; }
+  var head=["TargetName","TargetPath","Arguments","Tags","Score","Suspicious","FirstOpened_UTC","LastOpened_UTC","DriveType","VolumeLabel","VolumeSerial","MachineID","IsNetwork","IsRemovable","LnkFileSizeBytes","TargetSizeBytes","SourceFile"];
+  var lines=[head.join(",")];
+  for(var i=0;i<rows.length;i++){ var r=rows[i];
+    lines.push([cq(r.targetName),cq(r.targetPath),cq(r.args),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),
+      cq(r.srcCreated),cq(r.srcModified),cq(r.driveType),cq(r.volLabel),cq(r.volSerial),cq(r.machineId),
+      cq(r.isNetwork?"Yes":"No"),cq(r.isRemovable?"Yes":"No"),cq(r.lnkSize==null?"":r.lnkSize),cq(r.targetSize),cq(r.src)].join(",")); }
+  var dir=LASTOUTDIR||$("outDir").value;
+  var path=dir+"\\filtered_export_"+nowStamp()+".csv";
+  try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
+  catch(e){ setStatus("Export failed: "+e.message,"err"); }
+}
+function exportTimeline(){
+  var evs=window.__viewRows||[];
+  if(!evs.length){ setStatus("Nothing to export","err"); return; }
+  var head=["EventTime_UTC","Event","TargetName","TargetPath","HasArguments","Tags","Score","Suspicious","SourceFile"];
+  var lines=[head.join(",")];
+  for(var i=0;i<evs.length;i++){ var ev=evs[i], r=ev.rec;
+    lines.push([cq(ev.t),cq(ev.which),cq(r.targetName),cq(r.targetPath),cq(r.args?"Yes":"No"),
+      cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.src)].join(",")); }
+  var dir=LASTOUTDIR||$("outDir").value;
+  var path=dir+"\\timeline_export_"+nowStamp()+".csv";
+  try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(evs.length)+" events → "+path,"ok"); appendLog("Exported: "+path); }
+  catch(e){ setStatus("Export failed: "+e.message,"err"); }
+}
+function exportGeneric(){
+  var rows=window.__viewRows||[];
+  if(!GHEAD||!rows.length){ setStatus("Nothing to export","err"); return; }
+  var lines=[]; var hd=[]; for(var c=0;c<GHEAD.length;c++) hd.push(cq(GHEAD[c])); lines.push(hd.join(","));
+  for(var i=0;i<rows.length;i++){ var rw=rows[i]; var cells=[]; for(var c2=0;c2<GHEAD.length;c2++) cells.push(cq(c2<rw.length?rw[c2]:"")); lines.push(cells.join(",")); }
+  var dir=LASTOUTDIR||$("outDir").value;
+  var path=dir+"\\filtered_export_"+nowStamp()+".csv";
+  try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
+  catch(e){ setStatus("Export failed: "+e.message,"err"); }
+}
+function copyNotes(){
+  if(MODE==="generic"){
+    var grows=(window.__viewRows||[]).slice(0,500); if(!GHEAD||!grows.length){ setStatus("Nothing to copy","err"); return; }
+    var gout=[GHEAD.join("\t")];
+    for(var g=0;g<grows.length;g++) gout.push(grows[g].join("\t"));
+    try{ window.clipboardData.setData("Text", gout.join("\r\n")); setStatus("Copied "+grows.length+" rows (TSV)","ok"); }
+    catch(eg){ setStatus("Copy failed: "+eg.message,"err"); }
+    return;
+  }
+  var rows=(window.__viewRows||[]).slice(0,500);
+  if(!rows.length){ setStatus("Nothing to copy","err"); return; }
+  var out=[];
+  if(VIEW==="time"){
+    for(var j=0;j<rows.length;j++){ var ev=rows[j], er=ev.rec;
+      out.push(ev.t+" | "+ev.which+" | "+er.targetName+" | "+(er.targetPath||"?")
+        +(er.args?(" | args: "+truncate(er.args,80)):"")
+        +(er.tags.length?(" | "+er.tags.join(",")+" (score "+er.score+")"):"")); }
+    try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Copied "+out.length+" events to clipboard","ok"); }
+    catch(et){ setStatus("Copy failed: "+et.message,"err"); }
+    return;
+  }
+  for(var i=0;i<rows.length;i++){ var r=rows[i];
+    out.push(r.srcModified+" | "+r.targetName+" | "+(r.targetPath||"?")
+      +(r.args?(" | args: "+truncate(r.args,80)):"")
+      +(r.tags.length?(" | "+r.tags.join(",")+" (score "+r.score+")"):"")
+      +(r.reasons.length?(" | "+r.reasons.join("; ")):"")); }
+  try{ window.clipboardData.setData("Text", out.join("\r\n"));
+    setStatus("Copied "+out.length+" rows to clipboard","ok"); }
+  catch(e){ setStatus("Copy failed: "+e.message,"err"); }
+}
+
+/* ---------- IOC list ---------- */
+function applyIocs(){
+  var t=$("iocBox").value, parts=String(t).split(/[\r\n,;]+/), out=[];
+  for(var i=0;i<parts.length;i++){ var s=trimStr(parts[i]).toLowerCase(); if(s) out.push(s); }
+  IOCS=out;
+  $("iocInfo").innerHTML=IOCS.length?(nf(IOCS.length)+" term(s) active"):"no terms";
+  if(MODE==="lnk"&&ROWS.length){ rescoreAll(); render(); if(DETREC) renderDetail(DETREC); }
+  setStatus(IOCS.length?("IOC list applied — "+IOCS.length+" term(s), records rescored"):"IOC list cleared","ok");
+}
+
+/* ---------- wiring ---------- */
+function init(){
+  try{ window.resizeTo(1320,900); }catch(e){}
+  $("appver").innerHTML="&middot; v"+APP_VERSION;
+  try{ document.title="LECmd Wrapper v"+APP_VERSION; }catch(e){}
+  $("tblScroll").onscroll=applyFreeze;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  // default input = this user's Recent folder (directory mode)
+  try{ var ap=sh.ExpandEnvironmentStrings("%AppData%"); if(ap && ap.indexOf("%")<0) LIVE_RECENT=ap+"\\Microsoft\\Windows\\Recent"; }catch(e){}
+  $("inPath").value=LIVE_RECENT;
+  $("inMode").value="d";
+  var expBase=htaFolder()||fso.GetSpecialFolder(2)+"";
+  var expDir=expBase+"\\Exported CSVs";
+  try{ if(!fso.FolderExists(expDir)) fso.CreateFolder(expDir); }catch(e2){}
+  $("outDir").value=expDir;
+
+  var zoom=0.9;
+  var zContent=$("content");
+  function applyZoom(){ zContent.style.zoom=zoom; var p=Math.round(zoom*100)+"%";
+    $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
+  applyZoom();
+  $("fup").onclick=function(){ zoom=Math.min(zoom+0.15,2.5); applyZoom(); };
+  $("fdown").onclick=function(){ zoom=Math.max(zoom-0.15,0.6); applyZoom(); };
+
+  $("verBtn").onclick=checkVersion;
+  $("updBtn").onclick=downloadLatest;
+  $("openDirBtn").onclick=openDir;
+  $("procBtn").onclick=processLnk;
+  $("liveBtn").onclick=function(){
+    $("inMode").value="d"; $("inPath").value=LIVE_RECENT;
+    if(!LIVE_RECENT){ setStatus("Could not resolve your Recent folder path.","err"); return; }
+    if(!canListFolder(LIVE_RECENT))
+      setStatus("Heads up: "+LIVE_RECENT+" is not readable right now. Point at a collected copy instead.","err");
+    else setStatus("Recent folder readable — click 'Process → analyze' to scan your own shortcuts.","ok");
+  };
+  $("loadSelBtn").onclick=function(){ var v=$("producedSel").value; if(!v) return;
+    setStatus("Loading "+v,"muted"); window.setTimeout(function(){ loadCsvFile(v); },50); };
+  $("browseBtn").onclick=function(){
+    if($("inMode").value==="d"){
+      try{
+        var sha=new ActiveXObject("Shell.Application");
+        var fld=sha.BrowseForFolder(0,"Select the folder of shortcuts to process (collection trees are fine — the scan recurses).",0x51);
+        if(fld){ var p=""; try{ p=fld.Self.Path+""; }catch(e2){}
+          if(/^[a-z]:\\|^\\\\/i.test(p)) $("inPath").value=p;
+          else if(p) setStatus("That selection has no filesystem path — pick a real folder.","err"); }
+      }catch(e){ $("inPick").click(); }
+    } else { $("inPick").click(); }
+  };
+  $("inPick").onchange=function(){ if(this.value){ var v=this.value;
+    if($("inMode").value==="d"){ var i=v.lastIndexOf("\\"); if(i>0) v=v.substring(0,i); }
+    $("inPath").value=v; } };
+  $("loadBtn").onclick=function(){ $("csvPick").click(); };
+  $("csvPick").onchange=function(){ if(this.value){ setStatus("Loading "+this.value,"muted"); loadCsvFile(this.value); } };
+  $("logToggle").onclick=function(){ var l=$("log");
+    if(l.style.display==="none"||!l.style.display){
+      if(!trimStr(l.innerHTML.replace(/<[^>]*>/g,""))){ l.innerHTML='<span class="muted">(empty — LECmd output appears here after a run finishes. While a run is in progress a console window shows live progress.)</span>'; l.setAttribute("data-ph","1"); }
+      l.style.display="block"; this.innerHTML="Hide log";
+    } else { l.style.display="none"; this.innerHTML="Show log"; } };
+
+  var catBtns=$("lnkCats").getElementsByTagName("button");
+  for(var i=0;i<catBtns.length;i++){ if(catBtns[i].getAttribute("data-cat")){ catBtns[i].onclick=function(){
+    CURCAT=this.getAttribute("data-cat"); highlightCat(); render();
+  }; } }
+
+  $("q").onkeyup=function(){ if(qTimer) window.clearTimeout(qTimer);
+    qTimer=window.setTimeout(function(){ QUERY=trimStr($("q").value).toLowerCase(); render(); },150); };
+  $("dfrom").onchange=function(){ DFROM=dayNum(this.value); render(); };
+  $("dto").onchange=function(){ DTO=dayNum(this.value); render(); };
+  $("srcSel").onchange=function(){ SRCFILTER=this.value; render(); };
+  $("clearBtn").onclick=function(){ $("q").value="";$("dfrom").value="";$("dto").value="";$("srcSel").value="";
+    QUERY="";DFROM=0;DTO=0;SRCFILTER="";CURCAT="all"; highlightCat(); render(); };
+  $("exportBtn").onclick=exportView;
+  $("copyBtn").onclick=copyNotes;
+
+  $("vLinks").onclick=function(){ setView("links"); };
+  $("vTime").onclick=function(){ setView("time"); };
+  $("optTgtTs").onclick=function(){ SHOW_TGT=this.checked; buildEvents(); if(VIEW==="time") renderTime(); };
+  $("iocBtn").onclick=function(){ var w=$("iocWrap"); showEl("iocWrap", /\bhide\b/.test(w.className)); };
+  $("iocApply").onclick=applyIocs;
+  $("iocLoad").onclick=function(){ $("iocPick").click(); };
+  $("iocPick").onchange=function(){ if(this.value){
+    try{ $("iocBox").value=readUtf8(this.value); applyIocs(); }
+    catch(e){ setStatus("Could not read IOC file: "+e.message,"err"); } } };
+  $("detClose").onclick=closeDetail;
+  $("detCopy").onclick=copyDetail;
+
+  /* click delegation: data-q anywhere → search filter; lnk table row → detail pane */
+  document.onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    var q=t&&t.getAttribute?t.getAttribute("data-q"):null;
+    if(q){ $("q").value=q; QUERY=q.toLowerCase(); render(); return; }
+    if(MODE!=="lnk") return;
+    var n=t;
+    while(n && n.tagName!=="TR"){ n=n.parentNode; if(n&&n.tagName==="TABLE") { n=null; break; } }
+    if(n && n.getAttribute && n.getAttribute("data-i")!=null && n.getAttribute("data-i")!==""){
+      var ix=parseInt(n.getAttribute("data-i"),10);
+      var rows=window.__viewRows||[];
+      if(ix>=0&&ix<rows.length){
+        var rr=rows[ix].rec||rows[ix];          // timeline rows carry the record in .rec
+        renderDetail(rr);
+        var trs=$("tbl").getElementsByTagName("tr");
+        for(var z=0;z<trs.length;z++){ if(trs[z].getAttribute("data-i")!=null){
+          var zi=parseInt(trs[z].getAttribute("data-i"),10);
+          var zr=rows[zi]?(rows[zi].rec||rows[zi]):null;
+          trs[z].className = (zi===ix) ? (((zr&&zr.sus)?"sus ":"")+"sel") : ((zr&&zr.sus)?"sus":""); } }
+      }
+    }
+  };
+
+  var __cli=parseCli(); var __had=false; try{ __had=applyCli(__cli); }catch(eC){ appendLog("CLI parse error: "+eC.message); }
+  evaluateTooling(!__had);
+  if(isNetworkPath(htaFolder()))
+    appendLog("Heads-up: this app is running from a network location ("+htaFolder()+"). Windows zone policy may block the UTF-8 file reader there; the app falls back to ANSI IO automatically, but for full fidelity copy the folder to a local path (e.g. C:\\Tools\\LECmd).");
+}
+function isNetworkPath(p){
+  try{ if(/^\\\\/.test(p)) return true;
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    return fso.GetDrive(fso.GetDriveName(p)).DriveType===3;   // 3 = Remote
+  }catch(e){ return false; }
+}
+function dayNum(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if(!m) return 0;
+  function p(x){ x=String(x); return x.length<2?("0"+x):x; }
+  return Number(m[1]+p(m[2])+p(m[3])); }
+
+/* ---------- help / about overlay ---------- */
+var GITHUB="https://github.com/bpmorris22/LECmd-Wrapper";
+function openUrl(u){ try{ new ActiveXObject("WScript.Shell").Run('"'+u+'"',1,false); }catch(e){ setStatus("Could not open browser: "+e.message,"err"); } }
+function openHelp(){ try{ $("helpVer").innerHTML="v"+APP_VERSION; }catch(e){} showEl("helpModal",true); }
+function closeHelp(){ showEl("helpModal",false); }
+
+/* ---------- command-line invocation: "<inputOrCsv>" ["<outDir>"] [/auto] ----------
+   .csv → auto-load into the viewer; a .lnk file or directory → prefill input (+process if /auto).
+   HTA:APPLICATION.commandLine is UNDEFINED in IE=edge document mode (mshta quirk that silently kills CLI args).
+   Recover it from WMI: the newest mshta.exe process whose command line names this .hta. */
+function getCommandLine(){
+  try{ var cl=lecmdHta.commandLine+""; if(cl && cl!=="undefined") return cl; }catch(e){}
+  try{
+    var lp=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\");
+    var fn=lp.substring(lp.lastIndexOf("\\")+1).toLowerCase(); if(!fn) return "";
+    var loc=new ActiveXObject("WbemScripting.SWbemLocator"), svc=loc.ConnectServer(".","root\\cimv2");
+    var q=svc.ExecQuery("SELECT CommandLine,CreationDate FROM Win32_Process WHERE Name='mshta.exe'");
+    var best="", bestDate="", en=new Enumerator(q);
+    for(; !en.atEnd(); en.moveNext()){ var pr=en.item(); var pcl=(pr.CommandLine==null?"":pr.CommandLine+"");
+      if(pcl.toLowerCase().indexOf(fn)<0) continue; var cd=(pr.CreationDate==null?"":pr.CreationDate+"");
+      if(!best || cd>bestDate){ best=pcl; bestDate=cd; } }
+    return best;
+  }catch(e2){}
+  return "";
+}
+function tokenizeCmdTail(){ var cl=getCommandLine(); if(!cl) return [];
+  var m=cl.match(/\.hta"?/i); var tail=m?cl.substring(m.index+m[0].length):cl;
+  var toks=[],i=0,n=tail.length,cur="",inq=false;
+  while(i<n){ var c=tail.charAt(i);
+    if(inq){ if(c==='"'){inq=false;} else cur+=c; i++; continue; }
+    if(c==='"'){ inq=true; i++; continue; }
+    if(c===' '||c==='\t'){ if(cur!==""){toks.push(cur);cur="";} i++; continue; }
+    cur+=c; i++; }
+  if(cur!=="") toks.push(cur); return toks; }
+function parseCli(){ var toks=tokenizeCmdTail(), cli={input:"",outDir:"",auto:false};
+  for(var i=0;i<toks.length;i++){ var t=toks[i];
+    if(/^[\/\-]{1,2}auto$/i.test(t)){ cli.auto=true; continue; }
+    if(/^[\/\-]/.test(t)) continue;
+    if(!cli.input) cli.input=t; else if(!cli.outDir) cli.outDir=t; }
+  return cli; }
+function applyCli(cli){ if(!cli.input) return false;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(/\.csv$/i.test(cli.input) && fso.FileExists(cli.input)){ appendLog("CLI: loading CSV "+cli.input); window.setTimeout(function(){ loadCsvFile(cli.input); },60); return true; }
+  if(fso.FolderExists(cli.input)){ $("inMode").value="d"; $("inPath").value=cli.input; }
+  else if(fso.FileExists(cli.input)){ $("inMode").value="f"; $("inPath").value=cli.input; }
+  else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
+  if(cli.outDir) $("outDir").value=cli.outDir;
+  if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ processLnk(); },200); }
+  else setStatus("CLI: input prefilled — click 'Process → analyze' to run.","muted");
+  return true; }
+
+/* ---------- self-update: quiet check of this app's GitHub Releases; one-click download of a newer .hta ---------- */
+var SELF_REPO="bpmorris22/LECmd-Wrapper", SELF_HTA="LECmd-Wrapper.hta", SELF_LATEST="", SELF_ASSET_URL="";
+function selfVerNewer(r,l){ var a=String(r).split("."),b=String(l).split("."),n=Math.max(a.length,b.length);
+  for(var i=0;i<n;i++){ var x=parseInt(a[i],10)||0,y=parseInt(b[i],10)||0; if(x!==y) return x>y; } return false; }
+function selfPath(){ try{ var p=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\");
+  if(/\.hta$/i.test(p) && fileExists(p)) return p; }catch(e){} return (htaFolder()||"")+"\\"+SELF_HTA; }
+function checkSelfUpdate(){
+  try{
+    var x=new ActiveXObject("MSXML2.XMLHTTP.6.0");
+    x.open("GET","https://api.github.com/repos/"+SELF_REPO+"/releases/latest",true);
+    try{ x.setRequestHeader("User-Agent",SELF_HTA); }catch(eh){}
+    x.onreadystatechange=function(){ if(x.readyState!==4) return;
+      try{ if(x.status!==200) return; var t=x.responseText+"";
+        var m=t.match(/"tag_name"\s*:\s*"v?([0-9.]+)"/i); if(!m) return;
+        var latest=m[1]; if(!selfVerNewer(latest,APP_VERSION)) return;
+        var url="", re=/"browser_download_url"\s*:\s*"([^"]+\.hta)"/ig, mm;
+        while((mm=re.exec(t))){ if(mm[1].toLowerCase().indexOf(SELF_HTA.toLowerCase())>=0){ url=mm[1]; break; } if(!url) url=mm[1]; }
+        if(!url) url="https://github.com/"+SELF_REPO+"/releases/download/v"+latest+"/"+SELF_HTA;
+        SELF_LATEST=latest; SELF_ASSET_URL=url;
+        var b=$("selfUpd"); if(b){ b.innerHTML="Update to v"+latest; b.className="btn primary";
+          b.title="A newer "+SELF_HTA+" (v"+latest+") is on GitHub — click to download & replace this file"; }
+      }catch(e){} };
+    x.send();
+  }catch(e){}
+}
+function doSelfUpdate(){
+  if(!SELF_ASSET_URL){ setStatus("No update available (or offline).","muted"); return; }
+  var target=selfPath();
+  if(!target || !/\.hta$/i.test(target)){ setStatus("Can't locate this app's own file to update in place.","err"); return; }
+  if(!confirm("Download "+SELF_HTA+" v"+SELF_LATEST+" and replace this file?\n\n"+target+"\n\nAfter it downloads, close and reopen the app to run the new version.")) return;
+  setStatus("Downloading v"+SELF_LATEST+"…","muted");
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), tmp=fso.GetSpecialFolder(2)+"";
+  var ps1=tmp+"\\selfupd_"+new Date().getTime()+Math.floor(Math.random()*100000)+".ps1";
+  var tq=String(target).replace(/'/g,"''"), uq=String(SELF_ASSET_URL).replace(/'/g,"''");
+  var L=["$ErrorActionPreference='Stop'","[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12",
+    "$u='"+uq+"'","$t='"+tq+"'","$tmp=Join-Path $env:TEMP ('selfupd_'+[guid]::NewGuid().ToString('N')+'.hta')",
+    "Invoke-WebRequest -Uri $u -OutFile $tmp -Headers @{ 'User-Agent'='"+SELF_HTA+"' }",
+    "if((Get-Item $tmp).Length -lt 2000){ throw 'downloaded file too small' }",
+    "Copy-Item $tmp $t -Force","Remove-Item $tmp -Force -ErrorAction SilentlyContinue","Write-Output 'SELFUPD_OK'"];
+  try{ var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close(); }catch(ew){ setStatus("Self-update stage failed: "+ew.message,"err"); return; }
+  try{ var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -File "'+ps1+'" > "__LOG__" 2>&1']);
+    try{ fso.DeleteFile(ps1); }catch(e0){}
+    if((r.log+"").indexOf("SELFUPD_OK")>=0){ var b=$("selfUpd"); if(b) b.className="btn primary hide";
+      setStatus("Updated to v"+SELF_LATEST+" — CLOSE and reopen the app to run the new version.","ok");
+      try{ alert("Update installed (v"+SELF_LATEST+").\n\nClose and reopen "+SELF_HTA+" to run the new version."); }catch(e){}
+    } else { appendLog("--- self-update ---\n"+r.log); setStatus("Self-update failed — see log; download manually from GitHub if needed.","err"); }
+  }catch(e){ setStatus("Self-update failed: "+e.message,"err"); }
+}
+window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }catch(e){} };
+</script>
+<div id="helpModal" class="modal hide" onclick="if((event.srcElement||{}).id==='helpModal')closeHelp()">
+  <div class="mcard">
+    <span class="x" onclick="closeHelp()" title="Close">&times;</span>
+    <h2>LECmd Wrapper <span class="muted" style="font-size:13px;font-weight:400" id="helpVer"></span></h2>
+    <div class="gh muted">GitHub: <span class="lnk" onclick="openUrl(GITHUB)">https://github.com/bpmorris22/LECmd-Wrapper</span></div>
+    <p>A single-file GUI for triaging <b>Windows shortcut (.lnk) files</b> with Eric Zimmerman's LECmd — runs LECmd for you and turns the output into an interactive, suspicion-scored view built for hunting weaponized/phishing shortcuts, USB usage and foreign-machine origins.</p>
+    <h3>Quick start</h3>
+    <ul>
+      <li>Put this <code>.hta</code> next to <code>LECmd.exe</code>, or use <b>Update / download LECmd</b> to fetch it.</li>
+      <li>Point the input at your <b>Recent</b> folder (the <b>Scan my Recent folder</b> button), a collected shortcut folder (KAPE/Velociraptor trees work), or a single <code>.lnk</code> — then <b>Process → analyze</b>.</li>
+      <li>Or <b>Load existing CSV…</b> to view a LECmd CSV you already have.</li>
+    </ul>
+    <h3>Command line</h3>
+    <p><code>mshta "LECmd-Wrapper.hta" "&lt;inputOrCsv&gt;" ["&lt;outDir&gt;"] [/auto]</code></p>
+    <ul>
+      <li><code>&lt;input&gt;</code> — a <code>.csv</code> (auto-loads into the viewer) or a <code>.lnk</code> file / shortcut directory (prefilled; processed with <code>/auto</code>).</li>
+      <li><code>&lt;outDir&gt;</code> — CSV output directory (optional). &nbsp; <code>/auto</code> — process immediately.</li>
+    </ul>
+    <h3>Reading the results</h3>
+    <ul>
+      <li>Two views: <b>Links</b> (one row per .lnk) and <b>Timeline</b> (first-opened / last-opened activity events).</li>
+      <li><b>First opened</b> = when the target was first opened (lnk created); <b>Last opened</b> = most recent open (lnk last written). <b>Source accessed</b> is unreliable — the collection/parse bumps it.</li>
+      <li>Suspicion tags: <b>WEAPON</b> (LOLBIN/encoded arguments), <b>ARGS</b>, <b>EXEC</b>, <b>USERPATH</b>, <b>DBLEXT</b> (double-extension/RLO), <b>MASQ</b> (OS name outside \Windows\), <b>IOC</b>, <b>BIGLNK</b>. <b>NET</b>/<b>USB</b> are informational filters, not alarms.</li>
+      <li>All timestamps are UTC. LECmd emits one CSV — the timeline is built in the viewer.</li>
+    </ul>
+    <p class="muted" style="font-size:11px">MIT © 2026 Ben Morris — click the link above for the full README &amp; releases.</p>
+  </div>
+</div>
+
+</body>
+</html>

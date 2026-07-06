@@ -1,0 +1,21 @@
+# Case data & tool binaries must never be committed
+*.csv
+Exported CSVs/
+Exported_CSVs/
+
+# LECmd binaries (users download their own)
+LECmd.exe
+LECmd.dll
+LECmd*.json
+JLECmd*
+
+# local dev / state
+*.boot.log
+*.settings.json
+*.log
+SPEC.md
+*-SPEC.md
+
+# OS cruft
+Thumbs.db
+desktop.ini
