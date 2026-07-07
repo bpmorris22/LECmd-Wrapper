@@ -8,6 +8,12 @@ shortcuts** (ClickFix-style droppers), **USB / removable-media usage**, and **fo
 No install — double-click the `.hta` (it runs via `mshta.exe`). Part of a family of EZ-tool wrappers that
 share a common look, self-update, and command-line contract.
 
+![Links view](images/links-view.png)
+
+> Links view over a synthetic `Recent` folder: a weaponized `Invoice_7741.pdf.lnk` (`powershell -enc …`) scores 5
+> [WEAPON, ARGS, EXEC]; an IOC hit on `stage2`; **Volumes & origins** pane top-right. Screenshot uses synthetic
+> data (fake host `ACME-WS01` / user `jdoe`) — no real case data.
+
 ## Features
 
 - **Runs LECmd for you** — point at a single `.lnk`, a collected shortcut folder (KAPE / Velociraptor
