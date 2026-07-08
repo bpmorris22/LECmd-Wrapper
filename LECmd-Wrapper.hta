@@ -156,7 +156,7 @@
     <button class="btn" id="browseBtn">Browse&hellip;</button>
     <button class="btn" id="liveBtn" title="Point at this user's live Recent folder (%AppData%\Microsoft\Windows\Recent). No elevation needed for your own profile.">Scan my Recent folder</button>
     <label class="fld" title="Required before processing. Guessed from the input path (Collection-<host>-… segments, or this machine for live paths) — overwrite it if the guess is wrong.">Target hostname (required) &mdash; names the output folder _Processed\&lt;host&gt;\LECmd next to this app</label>
-    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. LT-2738RQ3">
+    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. WORKSTATION-01">
     <label class="fld">CSV output directory</label>
     <input class="txt wide" id="outDir" value="">
     <button class="btn" id="openDirBtn">Open folder</button>
@@ -251,7 +251,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.5.0";
+var APP_VERSION = "0.5.1";
 var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
 var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
 var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
