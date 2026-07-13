@@ -45,7 +45,7 @@
 <style>
   html{margin:0;height:100%;background:#0d1117}
   body{margin:0;height:100%;background:#0d1117;color:#e6edf3;font-family:Segoe UI,Tahoma,sans-serif;font-size:16px}
-  #content{zoom:0.9;box-sizing:border-box}
+  #content{zoom:0.9;width:111.111%;box-sizing:border-box}   /* zoom<1 shrinks a 100%-wide block below viewport width — widen by 1/zoom in CSS so it fills the window from the first paint (applyZoom keeps it in sync for A-/A+) */
   a{color:#58a6ff}
   .mono{font-family:Consolas,"Courier New",monospace}
   .muted{color:#8b949e}
@@ -217,6 +217,8 @@
       </div>
       <div class="row" style="margin-bottom:8px">
         <input class="txt" id="q" placeholder="search target, arguments, machine, volume&hellip;" style="width:280px">
+        <span id="userWrap" class="hide"><span class="sep"></span><label class="muted" style="font-size:12px">user:</label>
+          <select id="userSel" title="Filter to one Windows user account, parsed from the .lnk SourceFile path (…\Users\&lt;name&gt;\…). In a collection spanning several profiles this isolates one user's shortcuts. Shortcuts outside any user profile (system / All-Users Start Menu) group as (no user)."><option value="">All users</option></select></span>
         <span id="srcWrap" class="hide"><span class="sep"></span><label class="muted" style="font-size:12px">source:</label>
           <select id="srcSel" title="Filter by source file."><option value="">all source files</option></select></span>
         <span id="dateCtl" class="hide">
@@ -241,7 +243,7 @@
         <span class="muted" id="iocInfo" style="font-size:11px"></span>
       </div>
       <div class="scroll" id="tblScroll"><table id="tbl"></table></div>
-      <div class="muted" id="lnkFoot" style="font-size:11px;margin-top:6px">All timestamps UTC. Suspicious rows are shaded (heuristic score &ge; 2: weaponized arguments, executable/user-path target, masquerade, double-extension, IOC hits&hellip;). Click a row for full detail (all timestamps with semantics, every path variant, full arguments, volume &amp; tracker block). Max 6000 rows shown; export writes the full filtered set.</div>
+      <div class="muted" id="lnkFoot" style="font-size:11px;margin-top:6px">All timestamps UTC. Suspicious rows are shaded (heuristic score &ge; 2: weaponized arguments, executable/user-path target, masquerade, double-extension, IOC hits&hellip;). Click a row for full detail (all timestamps with semantics, every path variant, full arguments, volume &amp; tracker block); click a User cell to filter both views to that account (parsed from the .lnk path; system/All-Users shortcuts group as "(no user)"). Max 6000 rows shown; export writes the full filtered set.</div>
     </div>
 
     <div class="card hide" id="detailCard">
@@ -255,7 +257,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.6.1";
+var APP_VERSION = "0.7.1";
 var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
 var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
 var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -284,6 +286,7 @@ var GHEAD = null, GROWS = [], GSRC = "";
 var GSORTKEY = -1, GSORTDIR = 1;
 var GSRCIDX = -1;                    // generic mode: index of the SourceFile column
 var SRCFILTER = "";                  // selected source-file filter (generic mode)
+var USERFILTER = "";                 // selected user-account filter (lnk mode; userDisp value, "" = all users)
 var BUSY = false;                    // a LECmd run is in progress
 var PRODUCED = [];                   // CSVs produced by the last run
 
@@ -436,6 +439,22 @@ function pollDone(ctx){
 function distinctVals(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(v!=null && v!=="" && !seen[v]){ seen[v]=1; out.push(v); } } return out; }
 function shortPathN(p,n){ p=String(p); var parts=p.split("\\"); if(parts.length<=n) return p; return "…\\"+parts.slice(parts.length-n).join("\\"); }
 function shortPath(p){ return shortPathN(p,4); }
+/* the Windows user account a .lnk belongs to — the \Users\<name>\ segment of its SourceFile path
+   (tolerates Velociraptor's literal C%3A\Users\... since the \Users\ segment survives encoding) */
+function userFromSrc(s){ if(!s) return ""; var m=String(s).match(/[\\\/]users[\\\/]([^\\\/]+)/i); return m?m[1]:""; }
+/* user-account filter (lnk mode) — clone of the source dropdown; values are userDisp
+   (the parsed account name, or "(no user)" for shortcuts outside any user profile) */
+function populateUserFilter(vals){
+  var sel=$("userSel"); if(!sel) return;
+  var prev=USERFILTER, found=false;
+  sel.innerHTML="";
+  var o0=document.createElement("option"); o0.value=""; o0.text="All users ("+vals.length+")"; sel.add(o0);
+  vals=vals.slice(0).sort();
+  for(var i=0;i<vals.length;i++){ var o=document.createElement("option"); o.value=vals[i]; o.text=vals[i]; sel.add(o);
+    if(vals[i]===prev) found=true; }
+  if(prev&&found){ sel.value=prev; } else { USERFILTER=""; sel.value=""; }
+  showEl("userWrap", vals.length>1);
+}
 function populateSourceFilter(vals){
   var sel=$("srcSel"); sel.innerHTML="";
   var o0=document.createElement("option"); o0.value=""; o0.text="all source files ("+vals.length+")"; sel.add(o0);
@@ -529,11 +548,11 @@ function evaluateTooling(promptIfNeeded){
     }
   }
 }
-function downloadLatest(){
+function downloadLatest(silent, done){   // silent: skip the confirms (unattended /auto); done(ok): fired after install
   var target=htaFolder()||EXE_DIR;   // always install next to the .hta (self-contained)
-  if(!target){ setStatus("Cannot determine the app folder to install into","err"); return; }
-  if(!WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading LECmd from\n"+LECMD_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
-  if(WEB_OK && !confirm("Download latest LECmd (v"+(LATEST_VER||KNOWN_LATEST_LECMD)+") from:\n"+LECMD_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
+  if(!target){ setStatus("Cannot determine the app folder to install into","err"); if(done) done(false); return; }
+  if(!silent && !WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading LECmd from\n"+LECMD_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
+  if(!silent && WEB_OK && !confirm("Download latest LECmd (v"+(LATEST_VER||KNOWN_LATEST_LECMD)+") from:\n"+LECMD_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
   setStatus("Downloading & installing LECmd… (give it a moment)","muted");
   var tq=String(target).replace(/'/g,"''");
   var ps="$ErrorActionPreference='Stop';"
@@ -553,9 +572,23 @@ function downloadLatest(){
   try{
     var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+ps+'" > "__LOG__" 2>&1']);
     appendLog("--- LECmd download / install ---\n"+r.log);
-    if((r.log+"").indexOf("INSTALL_OK")>=0){ setStatus("LECmd installed to "+target,"ok"); evaluateTooling(false); }
-    else setStatus("Download/install failed — see log","err");
+    if((r.log+"").indexOf("INSTALL_OK")>=0){ setStatus("LECmd installed to "+target,"ok"); evaluateTooling(false); if(done) done(true); }
+    else { setStatus("Download/install failed — see log","err"); if(done) done(false); }
   }catch(e){ setStatus("Download failed: "+e.message,"err"); }
+}
+/* /auto launch: if the tool exe is missing, fetch it first and run in the install callback.
+   The Finder's Process / Process-all fires wrappers unattended, so a missing exe must self-resolve
+   rather than just erroring. Exe already present, or genuinely offline, falls straight through to the
+   normal run (the process function emits the existing clear "not found" message when offline). */
+function autoProcess(){
+  if(EXE && fileExists(EXE)){ processLnk(); return; }
+  if(WEB_OK){
+    setStatus("LECmd.exe not present - downloading it before this auto run…","muted");
+    appendLog("/auto: LECmd.exe missing - fetching it before processing");
+    downloadLatest(true, function(ok){ if(ok) processLnk(); });
+    return;
+  }
+  processLnk();   // offline: let the process function surface the existing "download it first" error
 }
 
 /* ---------- actions ---------- */
@@ -872,6 +905,7 @@ function ingestLnk(raw, idx, srcLabel){
       msModified:msOf(srcModified), dayModified:dayOf(srcModified),
       tags:[], reasons:[], score:0, sus:false, recent:false, dup:false, foreign:false
     };
+    rec.user=userFromSrc(src); rec.userDisp=rec.user||"(no user)";   // owning profile: \Users\<name>\ from the .lnk path, else a labeled bucket for system/all-users shortcuts
     rec.blob=(targetPath+" "+targetName+" "+args+" "+src+" "+workDir+" "+relPath+" "+volLabel+" "+volSerial+" "+machineId+" "+networkPath+" "+commonPath+" "+targetId).toLowerCase();
     ROWS.push(rec);
   }
@@ -880,6 +914,9 @@ function ingestLnk(raw, idx, srcLabel){
   rescoreAll();
   setMode("lnk");
   populateSourceFilter([]);
+  USERFILTER="";
+  var uvals=[]; for(var uu=0;uu<ROWS.length;uu++) uvals.push(ROWS[uu].userDisp);
+  populateUserFilter(distinctVals(uvals));
   $("results").className="";
   $("srcpill").innerHTML=nf(ROWS.length)+" shortcuts &middot; "+nf(EVENTS.length)+" events &middot; "+esc(srcLabel);
   QUERY=""; $("q").value=""; DFROM=CASE_FROM?dayNum(CASE_FROM):0; DTO=CASE_TO?dayNum(CASE_TO):0; $("dfrom").value=CASE_FROM||""; $("dto").value=CASE_TO||"";
@@ -1047,6 +1084,7 @@ var COLS=[
   {h:"Drive", sk:function(r){return String(r.driveType).toLowerCase();}, cell:function(r){return '<td class="'+(r.isRemovable?"":"muted")+'" title="'+esc(r.driveType)+'">'+esc(driveShort(r.driveType))+'</td>';}},
   {h:"Volume", sk:function(r){return String(r.volLabel).toLowerCase();}, cell:function(r){return '<td class="mono muted" title="serial '+esc(r.volSerial)+'">'+esc(r.volLabel||"—")+'</td>';}},
   {h:"Machine", sk:function(r){return String(r.machineId).toLowerCase();}, cell:function(r){return '<td class="mono muted">'+esc(r.machineId||"—")+'</td>';}},
+  {h:"User", sk:function(r){return String(r.userDisp).toLowerCase();}, cell:function(r){return '<td class="mono lnk" data-user="'+esc(r.userDisp)+'" title="Click to filter to this user — '+esc(r.userDisp)+'">'+esc(r.userDisp)+'</td>';}},
   {h:"Source .lnk", sk:function(r){return r.src.toLowerCase();}, cell:function(r){return '<td class="mono muted" title="'+esc(r.src)+'">'+esc(shortPathN(r.src,2))+'</td>';}}
 ];
 function lnkPass(r){
@@ -1064,6 +1102,7 @@ function lnkPass(r){
 function filteredLnk(){
   var out=[];
   for(var i=0;i<ROWS.length;i++){ var r=ROWS[i];
+    if(USERFILTER && r.userDisp!==USERFILTER) continue;
     if(DFROM&&(!r.dayModified||r.dayModified<DFROM)) continue;
     if(DTO&&(!r.dayModified||r.dayModified>DTO)) continue;
     if(!lnkPass(r)) continue;
@@ -1146,12 +1185,14 @@ var TCOLS=[
   {h:"Target", sk:function(ev){return ev.rec.targetNameL;}, cell:function(ev){return '<td class="mono lnk" data-q="'+esc(ev.rec.targetName)+'" title="'+esc(ev.rec.targetName)+'">'+esc(ev.rec.targetName)+'</td>';}},
   {h:"Target path", sk:function(ev){return ev.rec.targetPathL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.targetPath)+'">'+esc(ev.rec.targetPath||"—")+'</td>';}},
   {h:"Args", sk:function(ev){return ev.rec.args?1:0;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.args)+'">'+(ev.rec.args?('<span style="color:#58a6ff">yes</span>'):'<span class="muted">—</span>')+'</td>';}},
+  {h:"User", sk:function(ev){return String(ev.rec.userDisp).toLowerCase();}, cell:function(ev){return '<td class="mono lnk" data-user="'+esc(ev.rec.userDisp)+'" title="Click to filter to this user — '+esc(ev.rec.userDisp)+'">'+esc(ev.rec.userDisp)+'</td>';}},
   {h:"Source .lnk", sk:function(ev){return ev.rec.src.toLowerCase();}, cell:function(ev){return '<td class="mono muted" title="'+esc(ev.rec.src)+'">'+esc(shortPathN(ev.rec.src,2))+'</td>';}}
 ];
 function filteredTime(){
   var out=[];
   for(var i=0;i<EVENTS.length;i++){
     var ev=EVENTS[i];
+    if(USERFILTER && ev.rec.userDisp!==USERFILTER) continue;
     if(DFROM&&(!ev.day||ev.day<DFROM)) continue;
     if(DTO&&(!ev.day||ev.day>DTO)) continue;
     if(!lnkPass(ev.rec)) continue;
@@ -1355,7 +1396,7 @@ function setMode(m){
   MODE=m; var lnk=(m==="lnk");
   showEl("lnkCards",lnk); showEl("lnkCats",lnk); showEl("dateCtl",lnk); showEl("lnkFoot",lnk);
   showEl("iocBtn",lnk); showEl("viewToggle",lnk);
-  if(!lnk){ showEl("iocWrap",false); closeDetail(); }
+  if(!lnk){ showEl("iocWrap",false); closeDetail(); showEl("userWrap",false); }   // generic mode uses the source dropdown, not the user filter
   if(lnk) showEl("srcWrap",false);
   $("ovTitle").innerHTML = lnk ? "Overview &mdash; reflects active filters" : "Overview";
   $("tableTitle").innerHTML = lnk ? ((VIEW==="time")?"Activity timeline":"Shortcuts") : "Records";
@@ -1370,12 +1411,12 @@ function exportView(){
   if(VIEW==="time"){ exportTimeline(); return; }
   var rows=window.__viewRows||[];
   if(!rows.length){ setStatus("Nothing to export","err"); return; }
-  var head=["TargetName","TargetPath","Arguments","Tags","Score","Suspicious","FirstOpened_UTC","LastOpened_UTC","DriveType","VolumeLabel","VolumeSerial","MachineID","IsNetwork","IsRemovable","LnkFileSizeBytes","TargetSizeBytes","SourceFile"];
+  var head=["TargetName","TargetPath","Arguments","Tags","Score","Suspicious","FirstOpened_UTC","LastOpened_UTC","DriveType","VolumeLabel","VolumeSerial","MachineID","IsNetwork","IsRemovable","LnkFileSizeBytes","TargetSizeBytes","User","SourceFile"];
   var lines=[head.join(",")];
   for(var i=0;i<rows.length;i++){ var r=rows[i];
     lines.push([cq(r.targetName),cq(r.targetPath),cq(r.args),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),
       cq(r.srcCreated),cq(r.srcModified),cq(r.driveType),cq(r.volLabel),cq(r.volSerial),cq(r.machineId),
-      cq(r.isNetwork?"Yes":"No"),cq(r.isRemovable?"Yes":"No"),cq(r.lnkSize==null?"":r.lnkSize),cq(r.targetSize),cq(r.src)].join(",")); }
+      cq(r.isNetwork?"Yes":"No"),cq(r.isRemovable?"Yes":"No"),cq(r.lnkSize==null?"":r.lnkSize),cq(r.targetSize),cq(r.userDisp),cq(r.src)].join(",")); }
   var dir=LASTOUTDIR||$("outDir").value;
   var path=dir+"\\filtered_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
@@ -1384,11 +1425,11 @@ function exportView(){
 function exportTimeline(){
   var evs=window.__viewRows||[];
   if(!evs.length){ setStatus("Nothing to export","err"); return; }
-  var head=["EventTime_UTC","Event","TargetName","TargetPath","HasArguments","Tags","Score","Suspicious","SourceFile"];
+  var head=["EventTime_UTC","Event","TargetName","TargetPath","HasArguments","Tags","Score","Suspicious","User","SourceFile"];
   var lines=[head.join(",")];
   for(var i=0;i<evs.length;i++){ var ev=evs[i], r=ev.rec;
     lines.push([cq(ev.t),cq(ev.which),cq(r.targetName),cq(r.targetPath),cq(r.args?"Yes":"No"),
-      cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.src)].join(",")); }
+      cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.userDisp),cq(r.src)].join(",")); }
   var dir=LASTOUTDIR||$("outDir").value;
   var path=dir+"\\timeline_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(evs.length)+" events → "+path,"ok"); appendLog("Exported: "+path); }
@@ -1518,8 +1559,10 @@ function init(){
   $("dfrom").onchange=function(){ DFROM=dayNum(this.value); render(); };
   $("dto").onchange=function(){ DTO=dayNum(this.value); render(); };
   $("srcSel").onchange=function(){ SRCFILTER=this.value; render(); };
+  $("userSel").onchange=function(){ USERFILTER=this.value; render(); };
   $("clearBtn").onclick=function(){ $("q").value="";$("dfrom").value="";$("dto").value="";$("srcSel").value="";
-    QUERY="";DFROM=0;DTO=0;SRCFILTER="";CURCAT="all"; highlightCat(); render(); };
+    QUERY="";DFROM=0;DTO=0;SRCFILTER="";CURCAT="all"; USERFILTER=""; try{ $("userSel").value=""; }catch(ec){}
+    highlightCat(); render(); };
   $("exportBtn").onclick=exportView;
   $("copyBtn").onclick=copyNotes;
 
@@ -1535,8 +1578,10 @@ function init(){
   $("detClose").onclick=closeDetail;
   $("detCopy").onclick=copyDetail;
 
-  /* click delegation: data-q anywhere → search filter; lnk table row → detail pane */
+  /* click delegation: data-user → sticky user filter; data-q anywhere → search filter; lnk table row → detail pane */
   document.onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    var du=t&&t.getAttribute?t.getAttribute("data-user"):null;
+    if(du!=null&&du!==""){ USERFILTER=du; try{ $("userSel").value=du; }catch(eu){} render(); return; }   // user-cell click = filter, not detail
     var q=t&&t.getAttribute?t.getAttribute("data-q"):null;
     if(q){ $("q").value=q; QUERY=q.toLowerCase(); render(); return; }
     if(MODE!=="lnk") return;
@@ -1638,7 +1683,7 @@ function applyCli(cli){ if(!cli.input) return false;
   else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
   if(cli.outDir){ $("outDir").value=cli.outDir; OUT_TOUCHED=true; hostGuessFrom(cli.outDir); }
   else hostGuessFrom(cli.input);
-  if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ processLnk(); },200); }
+  if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ autoProcess(); },200); }
   else setStatus("CLI: input prefilled — click 'Process → analyze' to run.","muted");
   return true; }
 
@@ -1721,6 +1766,7 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
       <li><b>First opened</b> = when the target was first opened (lnk created); <b>Last opened</b> = most recent open (lnk last written). <b>Source accessed</b> is unreliable — the collection/parse bumps it.</li>
       <li>Suspicion tags: <b>WEAPON</b> (LOLBIN/encoded arguments), <b>ARGS</b>, <b>EXEC</b>, <b>USERPATH</b>, <b>DBLEXT</b> (double-extension/RLO), <b>MASQ</b> (OS name outside \Windows\), <b>IOC</b>, <b>BIGLNK</b>. <b>NET</b>/<b>USB</b> are informational filters, not alarms.</li>
       <li>All timestamps are UTC. LECmd emits one CSV — the timeline is built in the viewer.</li>
+      <li><b>User filter</b>: the <code>user:</code> dropdown (or clicking any User cell) isolates one Windows account across both views — the owning profile is parsed from the <code>.lnk</code> SourceFile path (<code>…\Users\&lt;name&gt;\…</code>). It appears only when a collection spans more than one profile; shortcuts outside any user profile (system / All-Users Start Menu) group under <code>(no user)</code>. Exports carry a User column and honor the filter.</li>
     </ul>
     <p class="muted" style="font-size:11px">MIT © 2026 Ben Morris — click the link above for the full README &amp; releases.</p>
   </div>
