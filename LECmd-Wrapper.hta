@@ -261,7 +261,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.2";
+var APP_VERSION = "0.8.3";
 var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
 var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
 var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -291,6 +291,7 @@ var VIEW = "links";                  // lnk mode: "links" = one row per .lnk, "t
 var ROWS = [];                       // lnk records
 var EVENTS = [];                     // flattened activity events {t, ms, day, which, rec}
 var SHOW_TGT = false;                // timeline also flattens target created/modified
+var COPYTS = "", COPYN = 0;          // lnk-created second shared by most shortcuts = the collection copy/extract time, not an open
 var CURCAT = "all";
 var DFROM = 0, DTO = 0;
 var SORTKEY = 5, SORTDIR = -1;       // links view: default Last opened desc
@@ -986,11 +987,13 @@ function ingestLnk(raw, idx, srcLabel){
       msModified:msOf(srcModified), dayModified:dayOf(srcModified),
       tags:[], reasons:[], score:0, sus:false, recent:false, dup:false, foreign:false
     };
+    rec.lkind=lnkKind(src);   // recent / pinned / other: decides what the lnk created / written times mean
     rec.user=userFromSrc(src); rec.userDisp=rec.user||"(no user)";   // owning profile: \Users\<name>\ from the .lnk path, else a labeled bucket for system/all-users shortcuts
     rec.blob=(targetPath+" "+targetName+" "+args+" "+src+" "+workDir+" "+relPath+" "+volLabel+" "+volSerial+" "+machineId+" "+networkPath+" "+commonPath+" "+targetId).toLowerCase();
     ROWS.push(rec);
   }
   if(!ROWS.length){ ingestGeneric(raw, raw[0], srcLabel); return; }
+  detectCopyTs();
   buildEvents();
   rescoreAll();
   setMode("lnk");
@@ -1005,14 +1008,39 @@ function ingestLnk(raw, idx, srcLabel){
   SORTKEY=5; SORTDIR=-1; TSORTKEY=1; TSORTDIR=-1;
   setView("links", true);
   closeDetail();
-  setStatus("Loaded "+nf(ROWS.length)+" shortcuts ("+nf(EVENTS.length)+" activity events)","ok");
+  setStatus("Loaded "+nf(ROWS.length)+" shortcuts ("+nf(EVENTS.length)+" activity events)"
+    +(COPYTS?(" - "+nf(COPYN)+" lnk-created times are the collection copy time ("+COPYTS+"), not opens; target timestamps switched on"):""),"ok");
   render();
+}
+/* What a shortcut's own created / written times mean depends on where it lives. Only shell-written \Recent\
+   shortcuts record opens (created = first open, written = last open). \Quick Launch\ shortcuts (incl. User
+   Pinned\TaskBar and \StartMenu) record when they were pinned; any other .lnk (Desktop, Start Menu, ...)
+   just when it was created / last written - default-profile pins often still carry the OS build date. */
+function lnkKind(src){ var s=String(src).toLowerCase();
+  if(/\\(quick launch|user pinned)\\/.test(s)) return "pinned";
+  if(/\\recent\\/.test(s)) return "recent";
+  return "other"; }
+function tsNames(r){ return r.lkind==="recent" ? ["first opened","last opened"]
+  : r.lkind==="pinned" ? ["pinned (lnk created)","pinned lnk last written"] : ["lnk created","lnk last written"]; }
+/* A collection copied or unzipped onto the analysis box gets a NEW creation time on every file (the
+   modified time is kept), so most shortcuts then share one lnk-created second. When 5+ shortcuts and at
+   least half of them do, that second is the copy time: flag it, and switch on the target timestamps,
+   which are stored INSIDE each .lnk and survive the copy. */
+function detectCopyTs(){
+  var cnt={}, n=0, top="", topN=0, k, i;
+  COPYTS=""; COPYN=0;
+  for(i=0;i<ROWS.length;i++){ k=ROWS[i].srcCreated; if(!k) continue; n++; cnt[k]=(cnt[k]||0)+1; if(cnt[k]>topN){ topN=cnt[k]; top=k; } }
+  if(topN>=5 && topN*2>=n){ COPYTS=top; COPYN=topN; }
+  for(i=0;i<ROWS.length;i++) ROWS[i].copyTs=!!COPYTS && ROWS[i].srcCreated===COPYTS;
+  if(COPYTS){ SHOW_TGT=true; try{ $("optTgtTs").checked=true; }catch(e){}
+    appendLog("Note: "+COPYN+" of "+n+" shortcuts share the lnk-created time "+COPYTS+" UTC. That is when this collection was copied / extracted, not an open:"
+      +" those times are tagged copy, and the target timestamps (stored inside each .lnk) are switched on in the timeline."); }
 }
 function buildEvents(){
   EVENTS=[];
-  for(var e=0;e<ROWS.length;e++){ var r=ROWS[e];
-    if(r.srcCreated){ EVENTS.push({t:r.srcCreated, ms:r.msCreated, day:r.dayCreated, which:"first opened", kind:"open", rec:r}); }
-    if(r.srcModified && r.srcModified!==r.srcCreated){ EVENTS.push({t:r.srcModified, ms:r.msModified, day:r.dayModified, which:"last opened", kind:"open", rec:r}); }
+  for(var e=0;e<ROWS.length;e++){ var r=ROWS[e], nm=tsNames(r);
+    if(r.srcCreated){ EVENTS.push({t:r.srcCreated, ms:r.msCreated, day:r.dayCreated, which:(r.copyTs?"lnk created = collection copy time, not an open":nm[0]), kind:(r.copyTs?"copy":"open"), rec:r}); }
+    if(r.srcModified && r.srcModified!==r.srcCreated){ EVENTS.push({t:r.srcModified, ms:r.msModified, day:r.dayModified, which:nm[1], kind:"open", rec:r}); }
     if(SHOW_TGT){
       if(r.tgtCreated){ EVENTS.push({t:r.tgtCreated, ms:msOf(r.tgtCreated), day:dayOf(r.tgtCreated), which:"target created", kind:"tgt", rec:r}); }
       if(r.tgtModified && r.tgtModified!==r.tgtCreated){ EVENTS.push({t:r.tgtModified, ms:msOf(r.tgtModified), day:dayOf(r.tgtModified), which:"target modified", kind:"tgt", rec:r}); }
@@ -1078,6 +1106,7 @@ function scoreRec(rec, recentCut){
   if(rec.isNetwork){ tags.push("NET"); reasons.push("Target is a network / UNC path"+(rec.networkPath?(": "+rec.networkPath):"")); }
   if(rec.isRemovable){ tags.push("USB"); reasons.push("Target is on removable media"+(rec.volLabel?(" ("+rec.volLabel+")"):"")); }
   if(rec.dup){ tags.push("DUP"); }
+  if(rec.lkind==="pinned"){ tags.push("PINNED"); }   // informational: its times are pin times, not opens
   if(rec.foreign){ tags.push("FOREIGN"); reasons.push("Created on a different machine than most shortcuts in this set: "+rec.machineId); }
   rec.tags=tags; rec.reasons=reasons; rec.score=score; rec.sus=(score>=2);
 }
@@ -1160,8 +1189,10 @@ var COLS=[
   {h:"Target", sk:function(r){return r.targetNameL;}, cell:function(r){return '<td class="mono" title="'+esc(r.targetName)+'">'+esc(r.targetName)+'</td>';}},   // plain cell: a click opens the detail pane, which carries the file-name search link
   {h:"Target path", sk:function(r){return r.targetPathL;}, cell:function(r){return '<td class="mono" title="'+esc(r.targetPath)+'">'+esc(r.targetPath||"—")+'</td>';}},
   {h:"Arguments", sk:function(r){return r.argsL;}, cell:function(r){return '<td class="mono" title="'+esc(r.args)+'" style="'+(r.args?"color:#e6edf3":"")+'">'+esc(truncate(r.args,90)||"—")+'</td>';}},
-  {h:"First opened (UTC)", sk:function(r){return r.msCreated;}, cell:function(r){return '<td class="mono" title="lnk created — first time the target was opened">'+esc(r.srcCreated)+'</td>';}},
-  {h:"Last opened (UTC)", sk:function(r){return r.msModified;}, cell:function(r){return '<td class="mono" title="lnk last written — last time the target was opened">'+esc(r.srcModified)+'</td>';}},
+  {h:"First opened (UTC)", sk:function(r){return r.msCreated;}, cell:function(r){ var nm=tsNames(r);   // headings fit \Recent\ shortcuts; each cell says what it really is
+    return '<td class="mono'+(r.copyTs?' muted':'')+'" title="'+esc(r.copyTs?("lnk created = collection copy / extract time, shared by "+COPYN+" shortcuts - not an open"):(nm[0]+" (lnk created)"))+'">'
+      +esc(r.srcCreated)+(r.copyTs?' <span class="tag gen">copy</span>':'')+'</td>';}},
+  {h:"Last opened (UTC)", sk:function(r){return r.msModified;}, cell:function(r){return '<td class="mono" title="'+esc(tsNames(r)[1]+" (lnk last written)")+'">'+esc(r.srcModified)+'</td>';}},
   {h:"Drive", sk:function(r){return String(r.driveType).toLowerCase();}, cell:function(r){return '<td class="'+(r.isRemovable?"":"muted")+'" title="'+esc(r.driveType)+'">'+esc(driveShort(r.driveType))+'</td>';}},
   {h:"Volume", sk:function(r){return String(r.volLabel).toLowerCase();}, cell:function(r){return '<td class="mono muted" title="serial '+esc(r.volSerial)+'">'+esc(r.volLabel||"—")+'</td>';}},
   {h:"Machine", sk:function(r){return String(r.machineId).toLowerCase();}, cell:function(r){return '<td class="mono muted">'+esc(r.machineId||"—")+'</td>';}},
@@ -1262,7 +1293,7 @@ function applyFreeze(){
 var TCOLS=[
   {h:"Tags", sk:function(ev){return -ev.rec.score;}, cell:function(ev){return '<td class="first">'+tagHtml(ev.rec)+'</td>';}},
   {h:"Event time (UTC)", sk:function(ev){return ev.ms;}, cell:function(ev){return '<td class="mono">'+esc(ev.t)+'</td>';}},
-  {h:"Event", sk:function(ev){return ev.which;}, cell:function(ev){return '<td class="'+(ev.kind==="tgt"?"muted":"")+'">'+esc(ev.which)+'</td>';}},
+  {h:"Event", sk:function(ev){return ev.which;}, cell:function(ev){return '<td class="'+((ev.kind==="tgt"||ev.kind==="copy")?"muted":"")+'">'+esc(ev.which)+'</td>';}},
   {h:"Target", sk:function(ev){return ev.rec.targetNameL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.targetName)+'">'+esc(ev.rec.targetName)+'</td>';}},   // plain cell → detail pane (search link lives there)
   {h:"Target path", sk:function(ev){return ev.rec.targetPathL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.targetPath)+'">'+esc(ev.rec.targetPath||"—")+'</td>';}},
   {h:"Args", sk:function(ev){return ev.rec.args?1:0;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.args)+'">'+(ev.rec.args?('<span style="color:#58a6ff">yes</span>'):'<span class="muted">—</span>')+'</td>';}},
@@ -1379,8 +1410,10 @@ function renderDetail(rec){
   else h+='<div class="muted" style="font-size:12px;margin:4px 0">(none — shell-generated Recent shortcuts normally have no arguments)</div>';
   // timestamps with semantics
   h+='<h3>Timestamps (UTC)</h3>';
-  h+=kv("First opened", rec.srcCreated+"  (lnk created)");
-  h+=kv("Last opened", rec.srcModified+"  (lnk last written)");
+  var tn=tsNames(rec);
+  h+=kv(tn[0].charAt(0).toUpperCase()+tn[0].substring(1), rec.srcCreated+"  (lnk created)"
+    +(rec.copyTs?(" - collection copy / extract time shared by "+COPYN+" shortcuts, NOT an open"):""), rec.copyTs?"muted":"");
+  h+=kv(tn[1].charAt(0).toUpperCase()+tn[1].substring(1), rec.srcModified+"  (lnk last written)");
   h+=kv("Source accessed", rec.srcAccessed+"  — unreliable: bumped by the collection/parse itself","muted");
   h+=kv("Target created", rec.tgtCreated);
   h+=kv("Target modified", rec.tgtModified);
@@ -1420,7 +1453,8 @@ function copyDetail(){
   out.push("tags: "+(r.tags.length?r.tags.join(", "):"none")+"  score "+r.score);
   for(var q=0;q<r.reasons.length;q++) out.push("  - "+r.reasons[q]);
   if(trimStr(r.args)!=="") out.push("arguments: "+r.args);
-  out.push("first opened "+r.srcCreated+" (UTC); last opened "+r.srcModified+" (UTC)");
+  var tn=tsNames(r);
+  out.push(tn[0]+" "+r.srcCreated+" (UTC)"+(r.copyTs?" [collection copy time, not an open]":"")+"; "+tn[1]+" "+r.srcModified+" (UTC)");
   out.push("drive "+(r.driveType||"?")+"; volume "+(r.volLabel||"?")+" serial "+(r.volSerial||"?")+"; machine "+(r.machineId||"?"));
   out.push("source .lnk: "+r.src+(r.lnkSize!=null?("  ("+fmtSize(r.lnkSize)+")"):""));
   try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Record copied to clipboard","ok"); }
@@ -1868,7 +1902,8 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
     <h3>Reading the results</h3>
     <ul>
       <li>Two views: <b>Links</b> (one row per .lnk) and <b>Timeline</b> (first-opened / last-opened activity events).</li>
-      <li><b>First opened</b> = when the target was first opened (lnk created); <b>Last opened</b> = most recent open (lnk last written). <b>Source accessed</b> is unreliable — the collection/parse bumps it.</li>
+      <li><b>First opened</b> = when the target was first opened (lnk created); <b>Last opened</b> = most recent open (lnk last written). That holds for shell-written <b>\Recent\</b> shortcuts only: <b>PINNED</b> shortcuts (Quick Launch, taskbar and Start pins) record when they were pinned, and any other .lnk just when it was created / written. The timeline names each event accordingly. <b>Source accessed</b> is unreliable — the collection/parse bumps it.</li>
+      <li><b>copy</b>: when most shortcuts share one lnk-created second, that is when the collection was copied or extracted onto this box, not an open. Those times are tagged <b>copy</b>, and <b>include target timestamps</b> is switched on, because the target times are stored inside each .lnk and survive the copy. Target accessed stays out of the timeline: last-access updates are off by default from Vista / Server 2008 on, so it usually just repeats target created.</li>
       <li>Suspicion tags: <b>WEAPON</b> (LOLBIN/encoded arguments), <b>ARGS</b>, <b>EXEC</b>, <b>USERPATH</b>, <b>DBLEXT</b> (double-extension/RLO), <b>MASQ</b> (OS name outside \Windows\), <b>IOC</b>, <b>BIGLNK</b>. <b>NET</b>/<b>USB</b> are informational filters, not alarms.</li>
       <li>All timestamps are UTC. LECmd emits one CSV — the timeline is built in the viewer.</li>
       <li><b>User filter</b>: the <code>user:</code> dropdown (or clicking any User cell) isolates one Windows account across both views — the owning profile is parsed from the <code>.lnk</code> SourceFile path (<code>…\Users\&lt;name&gt;\…</code>). It appears only when a collection spans more than one profile; shortcuts outside any user profile (system / All-Users Start Menu) group under <code>(no user)</code>. Exports carry a User column and honor the filter.</li>
