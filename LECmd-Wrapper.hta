@@ -261,7 +261,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.1";
+var APP_VERSION = "0.8.2";
 var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
 var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
 var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -1693,6 +1693,8 @@ function init(){
       if(ix>=0&&ix<rows.length){
         var rr=rows[ix].rec||rows[ix];          // timeline rows carry the record in .rec
         renderDetail(rr);
+        try{ var dc=$("detailCard"), dt=dc.getBoundingClientRect().top;   // the card sits below the table: bring it on-screen, but only if it isn't already
+          if(dt<0 || dt>document.documentElement.clientHeight-120) dc.scrollIntoView(true); }catch(es){}
         var trs=$("tbl").getElementsByTagName("tr");
         for(var z=0;z<trs.length;z++){ if(trs[z].getAttribute("data-i")!=null){
           var zi=parseInt(trs[z].getAttribute("data-i"),10);
