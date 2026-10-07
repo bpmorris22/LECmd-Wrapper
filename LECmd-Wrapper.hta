@@ -261,7 +261,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.0";
+var APP_VERSION = "0.8.1";
 var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
 var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
 var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -1157,7 +1157,7 @@ function driveShort(dt){ dt=String(dt); if(/removable/i.test(dt)) return "Remova
   if(/network/i.test(dt)) return "Network"; if(/optical|cd/i.test(dt)) return "Optical"; if(/ram/i.test(dt)) return "RAM"; return dt||"—"; }
 var COLS=[
   {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
-  {h:"Target", sk:function(r){return r.targetNameL;}, cell:function(r){return '<td class="mono lnk" data-q="'+esc(r.targetName)+'" title="'+esc(r.targetName)+'">'+esc(r.targetName)+'</td>';}},
+  {h:"Target", sk:function(r){return r.targetNameL;}, cell:function(r){return '<td class="mono" title="'+esc(r.targetName)+'">'+esc(r.targetName)+'</td>';}},   // plain cell: a click opens the detail pane, which carries the file-name search link
   {h:"Target path", sk:function(r){return r.targetPathL;}, cell:function(r){return '<td class="mono" title="'+esc(r.targetPath)+'">'+esc(r.targetPath||"—")+'</td>';}},
   {h:"Arguments", sk:function(r){return r.argsL;}, cell:function(r){return '<td class="mono" title="'+esc(r.args)+'" style="'+(r.args?"color:#e6edf3":"")+'">'+esc(truncate(r.args,90)||"—")+'</td>';}},
   {h:"First opened (UTC)", sk:function(r){return r.msCreated;}, cell:function(r){return '<td class="mono" title="lnk created — first time the target was opened">'+esc(r.srcCreated)+'</td>';}},
@@ -1263,7 +1263,7 @@ var TCOLS=[
   {h:"Tags", sk:function(ev){return -ev.rec.score;}, cell:function(ev){return '<td class="first">'+tagHtml(ev.rec)+'</td>';}},
   {h:"Event time (UTC)", sk:function(ev){return ev.ms;}, cell:function(ev){return '<td class="mono">'+esc(ev.t)+'</td>';}},
   {h:"Event", sk:function(ev){return ev.which;}, cell:function(ev){return '<td class="'+(ev.kind==="tgt"?"muted":"")+'">'+esc(ev.which)+'</td>';}},
-  {h:"Target", sk:function(ev){return ev.rec.targetNameL;}, cell:function(ev){return '<td class="mono lnk" data-q="'+esc(ev.rec.targetName)+'" title="'+esc(ev.rec.targetName)+'">'+esc(ev.rec.targetName)+'</td>';}},
+  {h:"Target", sk:function(ev){return ev.rec.targetNameL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.targetName)+'">'+esc(ev.rec.targetName)+'</td>';}},   // plain cell → detail pane (search link lives there)
   {h:"Target path", sk:function(ev){return ev.rec.targetPathL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.targetPath)+'">'+esc(ev.rec.targetPath||"—")+'</td>';}},
   {h:"Args", sk:function(ev){return ev.rec.args?1:0;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.args)+'">'+(ev.rec.args?('<span style="color:#58a6ff">yes</span>'):'<span class="muted">—</span>')+'</td>';}},
   {h:"User", sk:function(ev){return String(ev.rec.userDisp).toLowerCase();}, cell:function(ev){return '<td class="mono lnk" data-user="'+esc(ev.rec.userDisp)+'" title="Click to filter to this user — '+esc(ev.rec.userDisp)+'">'+esc(ev.rec.userDisp)+'</td>';}},
@@ -1368,7 +1368,8 @@ function chips(arr){ if(!arr||!arr.length) return '<span class="muted">—</span
 function renderDetail(rec){
   DETREC=rec;
   var h='<div class="mono" style="font-size:14px;margin-bottom:6px"><b>'+esc(rec.targetName)+'</b>'
-    +(rec.targetPath?('  <span class="muted">—</span>  '+esc(rec.targetPath)):'  <span class="muted">— no target path recovered</span>')+'</div>';
+    +(rec.targetPath?('  <span class="muted">—</span>  '+esc(rec.targetPath)):'  <span class="muted">— no target path recovered</span>')
+    +(rec.targetName?(' <span class="lnk" style="font-size:12px;font-family:Segoe UI,Arial" data-q="'+esc(rec.targetName)+'" title="Search the loaded rows for this file name">search this file name</span>'):'')+'</div>';
   h+='<div style="margin-bottom:6px">'+tagHtml(rec)+'</div>';
   if(rec.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:8px">';
     for(var q=0;q<rec.reasons.length;q++) h+="&bull; "+esc(rec.reasons[q])+"<br>"; h+='</div>'; }
