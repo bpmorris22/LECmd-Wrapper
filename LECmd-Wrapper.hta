@@ -103,6 +103,8 @@
   .dl div{overflow:hidden;text-overflow:ellipsis}
   .kv{font-size:12px;margin:2px 0}
   .kv b{display:inline-block;min-width:150px;color:#8b949e;font-weight:400}
+  .kv.kvhl{background:#1f3a5f;border-radius:3px;padding:0 4px;margin-left:-4px}   /* the timestamp the clicked Timeline row came from */
+  .evban{font-size:12px;background:#10263f;border:1px solid #1f6feb;border-radius:6px;padding:5px 8px;margin-bottom:8px}
   .chip{display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#21262d;color:#c9d1d9;margin:2px 3px 2px 0}
   .hl-user{color:#d29922}
   .hl-ioc{color:#ff6b6b;font-weight:700}
@@ -261,7 +263,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.3";
+var APP_VERSION = "0.8.4";
 var KNOWN_LATEST_LECMD = "1.5.0";                                              // baseline as of 2026-07-06
 var LECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/LECmd.zip"; // official EZ mirror (.NET 9 build)
 var LECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -298,6 +300,7 @@ var SORTKEY = 5, SORTDIR = -1;       // links view: default Last opened desc
 var TSORTKEY = 1, TSORTDIR = -1;     // timeline view: default EventTime desc
 var IOCS = [];                       // lowercased IOC / keyword terms
 var DETREC = null;                   // record currently shown in the detail pane
+var DETEV = null, DETHL = "";          // Timeline event the detail pane was opened from, and the kv label it maps to
 var GHEAD = null, GROWS = [], GSRC = "";
 var GSORTKEY = -1, GSORTDIR = 1;
 var GSRCIDX = -1;                    // generic mode: index of the SourceFile column
@@ -1394,10 +1397,25 @@ function hlArgs(args){
     out=out.replace(re,'<span class="hl-ioc">$1</span>'); }
   return out;
 }
-function kv(k,v,cls){ if(v==null||v==="") return ""; return '<div class="kv"><b>'+esc(k)+'</b><span class="'+(cls||"mono")+'">'+esc(v)+'</span></div>'; }
+function kv(k,v,cls){ if(v==null||v==="") return ""; return '<div class="kv'+((DETHL&&k===DETHL)?' kvhl':'')+'"><b>'+esc(k)+'</b><span class="'+(cls||"mono")+'">'+esc(v)+'</span></div>'; }
 function chips(arr){ if(!arr||!arr.length) return '<span class="muted">—</span>'; var h=""; for(var i=0;i<arr.length;i++) h+='<span class="chip">'+esc(arr[i])+'</span>'; return h; }
-function renderDetail(rec){
-  DETREC=rec;
+var EVNAME = function(ev){ return ev.which; };
+function evInfo(ev){ var r=ev.rec, tn=tsNames(r), cap=function(s){ return s.charAt(0).toUpperCase()+s.substring(1); };
+  if(ev.kind==="copy") return [cap(tn[0]), "collection copy / extract time shared by "+COPYN+" shortcuts - not an open"];
+  if(ev.kind==="tgt") return ev.which==="target created"
+    ? ["Target created","the target file's own creation time, stored inside the .lnk - when the file appeared, not an action on the shortcut"]
+    : ["Target modified","the target file's last-modified time as recorded when the .lnk was last written"];
+  if(ev.which===tn[0]) return [cap(tn[0]), r.lkind==="recent" ? "lnk created - the first time this target was opened from the shell"
+    : r.lkind==="pinned" ? "lnk created - when the shortcut was pinned (default-profile pins keep the OS build date)" : "lnk created - not necessarily an open"];
+  if(ev.which===tn[1]) return [cap(tn[1]), r.lkind==="recent" ? "lnk last written - the last time this target was opened from the shell"
+    : r.lkind==="pinned" ? "lnk last written - when the pin was last updated, not an open" : "lnk last written - not necessarily an open"];
+  return ["",""]; }
+/* A record can feed several Timeline rows (opened, target created, ...): when the detail pane is opened from
+   one, say which event that row is and highlight the timestamp it came from (evInfo -> [kv label, meaning]). */
+function evBanner(ev){ if(!ev) return ""; var inf=evInfo(ev);
+  return '<div class="evban">Timeline event: <b>'+esc(EVNAME(ev))+'</b> &nbsp;<span class="mono">'+esc(ev.t)+'</span>'+(inf[1]?(' &nbsp;- '+esc(inf[1])):'')+'</div>'; }
+function renderDetail(rec, ev){
+  DETREC=rec; DETEV=ev||null; DETHL=DETEV?evInfo(DETEV)[0]:"";
   var h='<div class="mono" style="font-size:14px;margin-bottom:6px"><b>'+esc(rec.targetName)+'</b>'
     +(rec.targetPath?('  <span class="muted">—</span>  '+esc(rec.targetPath)):'  <span class="muted">— no target path recovered</span>')
     +(rec.targetName?(' <span class="lnk" style="font-size:12px;font-family:Segoe UI,Arial" data-q="'+esc(rec.targetName)+'" title="Search the loaded rows for this file name">search this file name</span>'):'')+'</div>';
@@ -1442,10 +1460,10 @@ function renderDetail(rec){
   h+='<div class="kv"><b>File attributes</b>'+chips(rec.fileAttrs)+'</div>';
   h+='<div class="kv"><b>Extra blocks</b>'+chips(rec.extraBlocks)+'</div>';
   h+='<div class="kv" style="margin-top:6px"><b>Source .lnk</b><span class="mono muted">'+esc(rec.src)+'</span></div>';
-  $("detBody").innerHTML=h;
+  $("detBody").innerHTML=evBanner(DETEV)+h;
   showEl("detailCard",true);
 }
-function closeDetail(){ DETREC=null; showEl("detailCard",false); $("detBody").innerHTML=""; }
+function closeDetail(){ DETREC=null; DETEV=null; DETHL=""; showEl("detailCard",false); $("detBody").innerHTML=""; }
 function copyDetail(){
   if(!DETREC){ setStatus("No record open","err"); return; }
   var r=DETREC, out=[];
@@ -1598,7 +1616,7 @@ function applyIocs(){
   for(var i=0;i<parts.length;i++){ var s=trimStr(parts[i]).toLowerCase(); if(s) out.push(s); }
   IOCS=out;
   $("iocInfo").innerHTML=IOCS.length?(nf(IOCS.length)+" term(s) active"):"no terms";
-  if(MODE==="lnk"&&ROWS.length){ rescoreAll(); render(); if(DETREC) renderDetail(DETREC); }
+  if(MODE==="lnk"&&ROWS.length){ rescoreAll(); render(); if(DETREC) renderDetail(DETREC, DETEV); }
   setStatus(IOCS.length?("IOC list applied — "+IOCS.length+" term(s), records rescored"):"IOC list cleared","ok");
 }
 
@@ -1726,7 +1744,7 @@ function init(){
       var rows=window.__viewRows||[];
       if(ix>=0&&ix<rows.length){
         var rr=rows[ix].rec||rows[ix];          // timeline rows carry the record in .rec
-        renderDetail(rr);
+        renderDetail(rr, rows[ix].rec?rows[ix]:null);   // a Timeline row passes its event too
         try{ var dc=$("detailCard"), dt=dc.getBoundingClientRect().top;   // the card sits below the table: bring it on-screen, but only if it isn't already
           if(dt<0 || dt>document.documentElement.clientHeight-120) dc.scrollIntoView(true); }catch(es){}
         var trs=$("tbl").getElementsByTagName("tr");
